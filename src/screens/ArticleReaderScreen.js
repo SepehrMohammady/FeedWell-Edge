@@ -44,6 +44,7 @@ import {
   TRANSLATION_MODES,
   getPopularLanguages,
 } from '../utils/translationService';
+import { startReadSession, updateReadSessionScroll, finishReadSession, runContinualLearningStep } from '../edgeml/localLearningService';
 
 // Map short ISO-639 codes to full BCP-47 locales for TTS engine compatibility
 const TTS_LOCALE_MAP = {
@@ -79,7 +80,7 @@ function ArticleReaderScreenContent({ route, navigation }) {
     currentSortOrder = 'newest' 
   } = route.params;
   const { theme } = useTheme();
-  const { showImages, showBookmarkIndicators, speechRate, readerHeaderActions, updateReaderHeaderActions } = useAppSettings();
+  const { showImages, showBookmarkIndicators, speechRate, readerHeaderActions, updateReaderHeaderActions, onDeviceLearningEnabled } = useAppSettings();
   const { markArticleRead, articles: allArticles } = useFeed();
   
   // Resolve article from deep link if needed
@@ -116,6 +117,8 @@ function ArticleReaderScreenContent({ route, navigation }) {
   const bookmarkFlashAnim = useRef(new Animated.Value(0)).current;
   const [contentReady, setContentReady] = useState(false);
   const [measuredContentHeight, setMeasuredContentHeight] = useState(0);
+  const maxScrollPercentRef = useRef(0);
+  const lastStoredScrollStepRef = useRef(0);
 
   // Custom alert state
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', icon: null, buttons: [] });
@@ -504,6 +507,18 @@ function ArticleReaderScreenContent({ route, navigation }) {
     };
   }, [article?.id ?? article?.link]);
 
+  useEffect(() => {
+    if (!onDeviceLearningEnabled || !article?.id) return;
+
+    startReadSession(article);
+    maxScrollPercentRef.current = 0;
+    lastStoredScrollStepRef.current = 0;
+
+    return () => {
+      finishReadSession(article.id).then(() => runContinualLearningStep());
+    };
+  }, [onDeviceLearningEnabled, article?.id]);
+
   // Mark article as read when the screen is viewed - only once
   useEffect(() => {
     if (article && article.id && !hasMarkedReadRef.current) {
@@ -873,6 +888,19 @@ function ArticleReaderScreenContent({ route, navigation }) {
   const handleScroll = (event) => {
     const offsetY = event.nativeEvent.contentOffset.y;
     currentScrollY.current = offsetY;
+
+    if (onDeviceLearningEnabled && contentHeightRef.current > 0 && viewportHeightRef.current > 0) {
+      const maxScrollable = Math.max(1, contentHeightRef.current - viewportHeightRef.current);
+      const scrollPercent = Math.max(0, Math.min(100, (offsetY / maxScrollable) * 100));
+      maxScrollPercentRef.current = Math.max(maxScrollPercentRef.current, scrollPercent);
+
+      const step = Math.floor(maxScrollPercentRef.current / 10);
+      if (step > lastStoredScrollStepRef.current && article?.id) {
+        lastStoredScrollStepRef.current = step;
+        updateReadSessionScroll(article.id, maxScrollPercentRef.current);
+      }
+    }
+
     // Show button when user scrolls down more than 200 pixels
     setShowScrollToTop(offsetY > 200);
   };

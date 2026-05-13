@@ -18,6 +18,8 @@ export function AppSettingsProvider({ children }) {
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
   const [reduceMotion, setReduceMotion] = useState(false);
   const [readingReminder, setReadingReminder] = useState(true);
+  const [onDeviceLearningEnabled, setOnDeviceLearningEnabled] = useState(true);
+  const [onDeviceLearningRetentionDays, setOnDeviceLearningRetentionDays] = useState(30);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -40,6 +42,8 @@ export function AppSettingsProvider({ children }) {
       const savedHasSeenOnboarding = await AsyncStorage.getItem('hasSeenOnboarding');
       const savedReduceMotion = await AsyncStorage.getItem('reduceMotion');
       const savedReadingReminder = await AsyncStorage.getItem('readingReminder');
+      const savedOnDeviceLearningEnabled = await AsyncStorage.getItem('onDeviceLearningEnabled');
+      const savedOnDeviceLearningRetentionDays = await AsyncStorage.getItem('onDeviceLearningRetentionDays');
       
       if (savedShowImages !== null) {
         setShowImages(JSON.parse(savedShowImages));
@@ -95,6 +99,14 @@ export function AppSettingsProvider({ children }) {
 
       if (savedReadingReminder !== null) {
         setReadingReminder(JSON.parse(savedReadingReminder));
+      }
+
+      if (savedOnDeviceLearningEnabled !== null) {
+        setOnDeviceLearningEnabled(JSON.parse(savedOnDeviceLearningEnabled));
+      }
+
+      if (savedOnDeviceLearningRetentionDays !== null) {
+        setOnDeviceLearningRetentionDays(JSON.parse(savedOnDeviceLearningRetentionDays));
       }
     } catch (error) {
       console.error('Error loading app settings:', error);
@@ -238,6 +250,24 @@ export function AppSettingsProvider({ children }) {
     }
   };
 
+  const updateOnDeviceLearningEnabled = async (value) => {
+    try {
+      setOnDeviceLearningEnabled(value);
+      await AsyncStorage.setItem('onDeviceLearningEnabled', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving onDeviceLearningEnabled setting:', error);
+    }
+  };
+
+  const updateOnDeviceLearningRetentionDays = async (value) => {
+    try {
+      setOnDeviceLearningRetentionDays(value);
+      await AsyncStorage.setItem('onDeviceLearningRetentionDays', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving onDeviceLearningRetentionDays setting:', error);
+    }
+  };
+
   const value = {
     showImages,
     autoRefresh,
@@ -253,6 +283,8 @@ export function AppSettingsProvider({ children }) {
     hasSeenOnboarding,
     reduceMotion,
     readingReminder,
+    onDeviceLearningEnabled,
+    onDeviceLearningRetentionDays,
     isLoading,
     updateShowImages,
     updateAutoRefresh,
@@ -269,6 +301,8 @@ export function AppSettingsProvider({ children }) {
     resetOnboarding,
     updateReduceMotion,
     updateReadingReminder,
+    updateOnDeviceLearningEnabled,
+    updateOnDeviceLearningRetentionDays,
   };
 
   return (
