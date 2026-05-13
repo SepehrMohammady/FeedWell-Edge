@@ -1,201 +1,93 @@
-<p align="center">
-  <img src="assets/icon.png" alt="FeedWell Logo" width="120" height="120" style="border-radius: 24px;" />
-</p>
+# FeedWell-Edge Research Repository
 
-<h1 align="center">FeedWell</h1>
+## Project Scope
 
-<p align="center">
-  <strong>Ad-free RSS feed reader for Android, iOS & Windows</strong>
-</p>
+This repository hosts the implementation track for a PhD-oriented research project on:
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20Windows-green?style=flat-square" alt="Platforms" />
-  <img src="https://img.shields.io/badge/license-MIT-orange?style=flat-square" alt="License" />
-</p>
+**On-device continual personalization for recommender systems under strict privacy constraints.**
 
-<p align="center">
-  <em>Read the web, minus the clutter.</em>
-</p>
+The working application is an Android RSS reader used as a realistic testbed. The scientific objective is not RSS-specific; RSS is the current input domain used to evaluate methods that should transfer to other content platforms.
 
----
+## Core Research Goal
 
-## 💡 What is FeedWell?
+Design and validate a deployable recommender pipeline that:
 
-FeedWell is a **clean, private RSS reader** that blocks ads, removes trackers, and lets you focus on what matters — the content. Subscribe to any RSS or Atom feed and enjoy distraction-free reading.
+1. Learns continuously from organic on-device behavior.
+2. Keeps raw user behavior and model updates on-device only.
+3. Mitigates model collapse under concept drift.
+4. Meets practical deployment constraints: latency, footprint, storage growth, energy cost, and reproducibility.
 
-No accounts. No tracking. No ads. Everything stays on your device.
+## Current Paper Direction
 
----
+Working title:
 
-## ✨ Features
+**On-Device Continual Personalization for RSS Readers: A TinyML Approach to Privacy-Preserving Recommendation**
 
-<table>
-<tr>
-<td width="50%">
+Primary paper artifacts:
 
-### 📰 Smart Feed Reader
-- Subscribe to any RSS / Atom feed
-- One-tap access to popular feeds (BBC, TechCrunch, Reuters, The Verge, and more)
-- Auto-refresh keeps articles up to date
-- Search articles across all feeds
-- Filter by read / unread status
+- [docs/paper/main.tex](docs/paper/main.tex)
+- [docs/paper/related-work-matrix.md](docs/paper/related-work-matrix.md)
+- [docs/paper/references.bib](docs/paper/references.bib)
 
-</td>
-<td width="50%">
+Visual architecture and roadmap page:
 
-### 🚫 Built-in Ad Blocker
-- Strips ads, tracking scripts & promotional content from feeds
-- Removes tracking pixels and analytics
-- Blocks ad domains (Google Ads, Facebook, Taboola, etc.)
-- Clean HTML rendering preserves article structure
+- [docs/guide/approach-blueprint.html](docs/guide/approach-blueprint.html)
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+## Selected Implementation Approach (Current)
 
-### 📖 Beautiful Reader
-- In-app article reader with clean typography
-- Translate articles — Google Translate (online) + ML Kit (offline)
-- Default translation language matches your device language
-- Read aloud (TTS) with adjustable speed
-- Reading position bookmark — save and restore your scroll position
-- RTL language support (Farsi, Arabic, Hebrew)
-- Selectable text for copying
-- Open in browser or read in-app
+Phase-aligned strategy:
 
-</td>
-<td width="50%">
+1. Local event pipeline: impression, open, dwell/scroll-depth session events.
+2. Lightweight continual learner baseline with bounded replay.
+3. Drift-aware update scheduling and anti-collapse controls.
+4. Deployment-focused evaluation loop with strict efficiency metrics.
+5. TinyML transfer readiness for future STM32 deployment.
 
-### 🔖 Save for Later
-- Bookmark articles to read later
-- Search & sort saved articles
-- Sort by newest or oldest
-- Share articles with preview images
+## Efficiency-Centric Evaluation Targets
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+All experiments should report:
 
-### 🎵 Ambient Sounds
-- Background audio while reading — white noise, lo-fi beats, nature sounds, and more
-- Per-sound volume control
-- Auto-play on app launch (optional)
-- Access from the header icon or reader menu
+1. Ranking quality and adaptation speed.
+2. Inference latency and update latency.
+3. Memory and persistent storage footprint.
+4. Battery/thermal overhead.
+5. Privacy guarantees under local-only processing.
 
-</td>
-<td width="50%">
+## Repository Workflow Requirements
 
-### 📱 Home Screen Widget
-- Scrollable article list or compact single-article view
-- Dark / Light theme — follows app theme or set independently
-- Quick-add shortcut from Settings
-- Change opacity from Settings
+For each change set:
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+1. Update implementation and documentation artifacts together.
+2. Keep README, paper sources, and guidance page synchronized.
+3. Export paper PDF after paper changes.
+4. Commit and push all updates to this repository.
 
-### 🎨 Personalized Experience
-- Dark mode & light mode (follows device theme on first install)
-- Toggle article images on/off
-- Choose your theme accent color
-- Responsive layout for any screen size
-- Full backup & restore — export/import feeds, articles, saved items, and all settings
+## Build and Run
 
-</td>
-<td width="50%">
-
-### 🛡️ Privacy First
-- Zero data collection — all data stays on your device
-- No analytics — no tracking whatsoever
-- Local storage — feeds & articles stored securely
-- Reading reminder — gentle notification if you haven't read in a while
-- Open source — inspect every line of code
-
-</td>
-</tr>
-</table>
-
----
-
-## 📱 Supported Platforms
-
-| Platform | Status |
-|----------|--------|
-| 🤖 Android | ✅ Full support |
-| 🍎 iOS | ✅ Full support |
-| 🪟 Windows | ✅ Web-based |
-
----
-
-## 📥 Installation
-
-### Android
-Download the latest APK from [Releases](https://github.com/SepehrMohammady/FeedWell/releases) and install it directly on your device.
-
-### Build from Source
 ```bash
-git clone https://github.com/SepehrMohammady/FeedWell.git
-cd FeedWell
 npm install
+npm run android
 ```
 
-**Android APK:**
+Release build:
+
 ```bash
 cd android
 .\gradlew assembleRelease
-# APK → android/app/build/outputs/apk/release/app-release.apk
 ```
 
-**Development server:**
+## Versioning
+
+Research track version baseline is now in the 2.x line.
+
+- Current version target for this update cycle: **2.0.1**
+
+Version sync script:
+
 ```bash
-npm start
+node scripts/update-version.js <version>
 ```
 
----
+## License
 
-## 🗂️ Project Structure
-
-```
-FeedWell/
-├── src/
-│   ├── components/     # Reusable UI components
-│   ├── config/         # Version & app configuration
-│   ├── context/        # State management (feeds, themes, settings)
-│   ├── navigation/     # Tab & stack navigation
-│   ├── screens/        # App screens (Home, Feeds, Reader, Settings)
-│   └── utils/          # RSS parser, ad blocker, language detection
-├── assets/             # App icons & splash images
-├── scripts/            # Version management tools
-└── android/            # Native Android build files
-```
-
----
-
-## 🛠️ Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Framework | React Native + Expo SDK 54 |
-| Navigation | React Navigation (Stack + Bottom Tabs) |
-| State | React Context API + useReducer |
-| Storage | AsyncStorage with SafeStorage wrapper |
-| RSS Parsing | react-native-rss-parser + custom ad-blocking |
-| Translation | Google Translate API + ML Kit on-device |
-| Build | Gradle (Android) / Expo (iOS & Web) |
-
----
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-<p align="center">
-  <strong>FeedWell</strong> — Your feeds. Your way. No ads. No tracking.<br/>
-  Made with ❤️ by <a href="https://github.com/SepehrMohammady">Sepehr Mohammady</a>
-</p>
+MIT License. See [LICENSE](LICENSE).
