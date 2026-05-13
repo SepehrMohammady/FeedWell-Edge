@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -24,11 +24,12 @@ import SaveButton from '../components/SaveButton';
 import ReadingPositionIndicator from '../components/ReadingPositionIndicator';
 import CustomAlert from '../components/CustomAlert';
 import { useAmbientSound } from '../context/AmbientSoundContext';
+import { recordImpression, recordOpen, runContinualLearningStep, purgeExpiredEvents } from '../edgeml/localLearningService';
 
 export default function FeedListScreen({ navigation, route }) {
   const { feeds, articles, loading, addArticles, setLoading, setError, markAllRead, markAllUnread, markArticleRead, markArticleUnread, getUnreadCount, getReadCount, readingPosition, setReadingPosition, clearReadingPosition } = useFeed();
   const { theme } = useTheme();
-  const { showImages, articleFilter, sortOrder, updateArticleFilter, updateSortOrder, maxArticleAge, skipArticleView, showReadingPositionInFeeds } = useAppSettings();
+  const { showImages, articleFilter, sortOrder, updateArticleFilter, updateSortOrder, maxArticleAge, skipArticleView, showReadingPositionInFeeds, onDeviceLearningEnabled, onDeviceLearningRetentionDays } = useAppSettings();
   const { setShowPlaylist: openSoundPlaylist } = useAmbientSound();
   const [refreshing, setRefreshing] = useState(false);
   const [forceRender, setForceRender] = useState(0);
@@ -37,6 +38,7 @@ export default function FeedListScreen({ navigation, route }) {
   const [searchQuery, setSearchQuery] = useState('');
   const flatListRef = useRef(null);
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', icon: null, buttons: [] });
+  const seenImpressionIdsRef = useRef(new Set());
 
   // Apply filter from navigation params (e.g., when clicking Unread from Home)
   useEffect(() => {
@@ -50,6 +52,11 @@ export default function FeedListScreen({ navigation, route }) {
       refreshFeeds();
     }
   }, [feeds.length]);
+
+  useEffect(() => {
+    if (!onDeviceLearningEnabled) return;
+    purgeExpiredEvents(onDeviceLearningRetentionDays);
+  }, [onDeviceLearningEnabled, onDeviceLearningRetentionDays]);
 
   // Force re-render when screen comes into focus to update read status
   useFocusEffect(
@@ -215,6 +222,16 @@ export default function FeedListScreen({ navigation, route }) {
   };
 
   const handleArticlePress = (article) => {
+    if (onDeviceLearningEnabled) {
+      const rank = filteredAndSortedArticles.findIndex(a => a.id === article.id) + 1;
+      recordOpen(article, {
+        rank: rank > 0 ? rank : null,
+        filter: articleFilter,
+        sortOrder,
+        source: skipArticleView ? 'feed_to_reader' : 'feed_to_actions',
+      }).then(() => runContinualLearningStep());
+    }
+
     if (skipArticleView) {
       navigation.navigate('ArticleReader', {
         article,
@@ -490,6 +507,24 @@ export default function FeedListScreen({ navigation, route }) {
   };
 
   const filteredAndSortedArticles = getFilteredArticles();
+
+  const onViewableItemsChanged = useCallback(({ viewableItems }) => {
+    if (!onDeviceLearningEnabled) return;
+    viewableItems.forEach((entry) => {
+      const article = entry?.item;
+      if (!article?.id) return;
+      if (seenImpressionIdsRef.current.has(article.id)) return;
+      seenImpressionIdsRef.current.add(article.id);
+      recordImpression(article, {
+        rank: entry.index != null ? entry.index + 1 : null,
+        filter: articleFilter,
+        sortOrder,
+        source: 'feed_list',
+      });
+    });
+  }, [onDeviceLearningEnabled, articleFilter, sortOrder]);
+
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
 
   const toggleFilter = () => {
     if (articleFilter === 'all') {
@@ -980,6 +1015,8 @@ export default function FeedListScreen({ navigation, route }) {
         data={filteredAndSortedArticles}
         renderItem={renderArticle}
         keyExtractor={(item) => item.id}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={viewabilityConfig}
         extraData={[articles, articleFilter, sortOrder, readingPosition?.afterArticleId]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />

@@ -45,11 +45,12 @@ import {
   downloadModel,
   deleteModel,
 } from '../utils/translationService';
+import { clearAllLocalLearningData, getLocalLearningSummary, purgeExpiredEvents } from '../edgeml/localLearningService';
 
 export default function SettingsScreen({ navigation }) {
   const { feeds, articles, clearAllData } = useFeed();
   const { theme, isDarkMode, toggleTheme, paletteIndex, setPalette, LIGHT_PALETTES, DARK_PALETTES } = useTheme();
-  const { showImages, autoRefresh, showBookmarkIndicators, skipArticleView, showReadingPositionInFeeds, allowRotation, speechRate, readerHeaderActions, reduceMotion, readingReminder, updateShowImages, updateAutoRefresh, updateShowBookmarkIndicators, updateSkipArticleView, updateShowReadingPositionInFeeds, updateAllowRotation, updateSpeechRate, updateReaderHeaderActions, updateReduceMotion, updateReadingReminder, maxArticleAge, updateMaxArticleAge } = useAppSettings();
+  const { showImages, autoRefresh, showBookmarkIndicators, skipArticleView, showReadingPositionInFeeds, allowRotation, speechRate, readerHeaderActions, reduceMotion, readingReminder, onDeviceLearningEnabled, onDeviceLearningRetentionDays, updateShowImages, updateAutoRefresh, updateShowBookmarkIndicators, updateSkipArticleView, updateShowReadingPositionInFeeds, updateAllowRotation, updateSpeechRate, updateReaderHeaderActions, updateReduceMotion, updateReadingReminder, updateOnDeviceLearningEnabled, updateOnDeviceLearningRetentionDays, maxArticleAge, updateMaxArticleAge } = useAppSettings();
   const { articles: readLaterArticles } = useReadLater();
   const { autoPlay, setAutoPlay, currentSound } = useAmbientSound();
   const insets = useSafeAreaInsets();
@@ -75,6 +76,7 @@ export default function SettingsScreen({ navigation }) {
   const [widgetTheme, setWidgetTheme] = useState('app'); // 'app', 'light', 'dark'
   const [showWidgetThemePicker, setShowWidgetThemePicker] = useState(false);
   const [widgetOpacity, setWidgetOpacity] = useState(100); // 0-100%
+  const [learningSummary, setLearningSummary] = useState(null);
 
   // Load target language and translation mode on mount
   useEffect(() => {
@@ -83,7 +85,45 @@ export default function SettingsScreen({ navigation }) {
     // Load widget preferences
     AsyncStorage.getItem('widget_theme').then(v => { if (v) setWidgetTheme(v); });
     AsyncStorage.getItem('widget_opacity').then(v => { if (v) setWidgetOpacity(parseInt(v, 10)); });
+    refreshLearningSummary();
   }, []);
+
+  const refreshLearningSummary = async () => {
+    try {
+      const summary = await getLocalLearningSummary();
+      setLearningSummary(summary);
+    } catch (error) {
+      console.error('Error loading learning summary:', error);
+    }
+  };
+
+  const handleOnDeviceLearningToggle = async (value) => {
+    await updateOnDeviceLearningEnabled(value);
+    if (value) {
+      await purgeExpiredEvents(onDeviceLearningRetentionDays);
+      await refreshLearningSummary();
+    }
+  };
+
+  const handleClearLearningData = () => {
+    setAlertConfig({
+      visible: true,
+      title: 'Reset Local Learning',
+      message: 'This will remove on-device interaction logs and local recommender state from this device only.',
+      icon: 'trash-outline',
+      buttons: [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            await clearAllLocalLearningData();
+            await refreshLearningSummary();
+          }
+        },
+      ],
+    });
+  };
 
   const handleChangeDefaultLang = async (langCode) => {
     setTargetLangCode(langCode);
@@ -1161,6 +1201,46 @@ export default function SettingsScreen({ navigation }) {
             title="Clear All Data"
             description="Remove all feeds and articles"
             onPress={handleClearAllData}
+            isLast={true}
+            rightElement={<Ionicons name="trash-outline" size={20} color={theme.colors.error} />}
+          />
+        </View>
+
+        <SectionHeader title="On-Device Learning (EdgeML)" />
+        <View style={styles.section}>
+          <SettingItem
+            title="Enable Local Learning"
+            description="Train personalization only on this device using your behavior"
+            rightElement={
+              <Switch
+                value={onDeviceLearningEnabled}
+                onValueChange={handleOnDeviceLearningToggle}
+                trackColor={{ false: '#767577', true: theme.colors.primary }}
+                thumbColor={onDeviceLearningEnabled ? '#fff' : '#f4f3f4'}
+              />
+            }
+          />
+          <SettingItem
+            title="Retention"
+            description={`Keep local learning interactions for ${onDeviceLearningRetentionDays} days`}
+            onPress={async () => {
+              const next = onDeviceLearningRetentionDays === 30 ? 90 : onDeviceLearningRetentionDays === 90 ? 180 : 30;
+              await updateOnDeviceLearningRetentionDays(next);
+              await purgeExpiredEvents(next);
+              await refreshLearningSummary();
+            }}
+            rightElement={<Ionicons name="swap-horizontal-outline" size={20} color={theme.colors.primary} />}
+          />
+          <SettingItem
+            title="Local Summary (7 days)"
+            description={learningSummary ? `${learningSummary.eventsLast7Days} events • top topic: ${learningSummary.topTopics?.[0]?.topic || 'n/a'}` : 'No local learning data yet'}
+            onPress={refreshLearningSummary}
+            rightElement={<Ionicons name="analytics-outline" size={20} color={theme.colors.primary} />}
+          />
+          <SettingItem
+            title="Reset Local Learning"
+            description="Delete local events and learned weights on this device"
+            onPress={handleClearLearningData}
             isLast={true}
             rightElement={<Ionicons name="trash-outline" size={20} color={theme.colors.error} />}
           />
