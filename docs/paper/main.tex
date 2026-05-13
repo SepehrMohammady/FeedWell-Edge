@@ -9,7 +9,7 @@
 \usepackage{enumitem}
 \usepackage{graphicx}
 
-\title{FeedWell-Edge: Privacy-by-Design On-Device Continual Learning for RSS Recommendation}
+\title{On-Device Continual Personalization for RSS Readers: A TinyML Approach to Privacy-Preserving Recommendation}
 \author{Sepehr Mohammady \\ Elios Lab, University of Genova}
 \date{\today}
 
@@ -17,7 +17,7 @@
 \maketitle
 
 \begin{abstract}
-This draft proposes FeedWell-Edge, an on-device recommender system for RSS reading that performs continual personalization using only local user behavior. The objective is to mitigate model collapse and privacy risks by keeping interaction logs, feature extraction, adaptation, and model updates entirely on-device. The work targets Android first and is designed to remain compatible with future TinyML transfer constraints for STM32-class hardware.
+This draft proposes an on-device recommender framework for RSS reading that performs continual personalization using only local user behavior. The objective is to mitigate model collapse and privacy risks by keeping interaction logs, feature extraction, adaptation, and model updates entirely on-device. The work targets Android first and is designed to remain compatible with future TinyML transfer constraints for STM32-class hardware. The current implementation path prioritizes a deployable local baseline with strict efficiency constraints on latency, memory footprint, storage growth, and battery cost.
 \end{abstract}
 
 \tableofcontents
@@ -53,15 +53,34 @@ TODO: Fill from matrix in related-work-matrix.md.
 \subsection{Proposed Novelty}
 TODO: Define novelty claims and boundary conditions.
 
+\subsection{Deployment-Centric Claims}
+TODO: Formalize efficiency-first claims with measurable thresholds for inference latency, online update overhead, memory footprint, and battery impact.
+
 \section{Methodology}
 \subsection{System Architecture}
 TODO: Add architecture figure and component breakdown.
+
+\subsection{Selected Implementation Approach (Current)}
+\begin{itemize}[leftmargin=*]
+\item \textbf{Phase A (current):} Lightweight local continual learner with event-driven updates and bounded replay, fully on-device.
+\item \textbf{Phase B:} Drift-aware adaptation policy using short-term vs long-term behavior divergence with update scheduling.
+\item \textbf{Phase C:} TinyML transfer track with compact model/state representation aligned with STM32 constraints.
+\end{itemize}
 
 \subsection{Local Interaction Pipeline}
 TODO: Define events (impression, open, read-session) and retention policy.
 
 \subsection{Continual Learning Strategy}
 TODO: Describe baseline learner, replay, drift logic, and anti-collapse safeguards.
+
+\subsection{Efficiency and Footprint Constraints}
+TODO: Report budgeted constraints and observed values:
+\begin{itemize}[leftmargin=*]
+\item Inference latency per ranked item and per list refresh.
+\item Local update latency and scheduling frequency.
+\item Memory and persistent storage footprint growth over time.
+\item Battery and thermal overhead in realistic usage sessions.
+\end{itemize}
 
 \subsection{Privacy Model}
 TODO: Threat model and guarantees for local-only design.
@@ -79,11 +98,19 @@ TODO: Static baseline vs CL-v1 and ablations.
 \subsection{Metrics}
 TODO: Utility, diversity, drift resilience, energy, memory, and latency.
 
+\subsection{Primary Evaluation Targets}
+\begin{itemize}[leftmargin=*]
+\item Accuracy and ranking quality under non-stationary user behavior.
+\item Adaptation speed after concept drift events.
+\item Resource efficiency: latency, memory footprint, storage overhead, energy cost.
+\item Privacy robustness under local-only constraints and no raw behavior export.
+\end{itemize}
+
 \section{Preliminary Implementation Status}
 \begin{itemize}[leftmargin=*]
-\item v1.6.23: Added local on-device interaction event pipeline in app code.
-\item v1.6.23: Added feed-level impression/open logging and reader dwell-depth session logging.
-\item v1.6.23: Added settings controls for local learning enablement, retention, summary, and reset.
+\item v2.0.1: Added local on-device interaction event pipeline in app code.
+\item v2.0.1: Added feed-level impression/open logging and reader dwell-depth session logging.
+\item v2.0.1: Added settings controls for local learning enablement, retention, summary, and reset.
 \end{itemize}
 
 \section{Threats to Validity}

@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>On-Device Continual Personalization - Blueprint</title>
+  <style>
+    :root {
+      --bg: #f3f5f7;
+      --card: #ffffff;
+      --text: #17202a;
+      --muted: #5f6b76;
+      --primary: #1e6f5c;
+      --accent: #c84b31;
+      --line: #d7dde3;
+      --good: #176b3f;
+      --warn: #b45309;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(180deg, #f8fafc, #ecf2f6);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 28px 18px 40px;
+    }
+    h1 { margin: 0 0 10px; font-size: 2rem; }
+    h2 { margin: 0 0 10px; font-size: 1.35rem; }
+    h3 { margin: 0 0 8px; font-size: 1.05rem; }
+    p { margin: 0 0 10px; color: var(--muted); }
+
+    .hero {
+      background: radial-gradient(circle at top right, #e2f4ef, #ffffff);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 18px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 2px 6px rgba(20, 35, 50, 0.05);
+    }
+    .span-6 { grid-column: span 6; }
+    .span-12 { grid-column: span 12; }
+    .span-4 { grid-column: span 4; }
+
+    .pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.78rem;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      margin-right: 6px;
+      margin-bottom: 6px;
+    }
+
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    .node {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      min-width: 165px;
+      flex: 1;
+    }
+    .arrow {
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+    }
+    .table th, .table td {
+      border: 1px solid var(--line);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .table th { background: #f2f7f5; }
+
+    .status-now { color: var(--good); font-weight: 700; }
+    .status-next { color: var(--warn); font-weight: 700; }
+
+    ul { margin: 0; padding-left: 18px; }
+    li { margin-bottom: 6px; color: var(--muted); }
+
+    @media (max-width: 920px) {
+      .span-6, .span-4, .span-12 { grid-column: span 12; }
+      .node { min-width: 100%; }
+      .arrow { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>On-Device Continual Personalization Blueprint</h1>
+      <p>
+        Scientific implementation map for a privacy-preserving recommender that learns fully on-device.
+        Domain is RSS today, but design choices are intentionally transferable across app categories.
+      </p>
+      <span class="pill">Android-first</span>
+      <span class="pill">Local-only learning</span>
+      <span class="pill">Deployability-focused metrics</span>
+      <span class="pill">TinyML transfer path</span>
+    </section>
+
+    <div class="grid">
+      <section class="card span-12">
+        <h2>Current vs Target System</h2>
+        <div class="flow">
+          <div class="node">
+            <h3>Current (Implemented)</h3>
+            <ul>
+              <li>Local event capture: impression/open/read-session</li>
+              <li>Dwell time + scroll-depth signals</li>
+              <li>On-device state updates and retention controls</li>
+              <li>No user behavior export to cloud</li>
+            </ul>
+          </div>
+          <div class="arrow">→</div>
+          <div class="node">
+            <h3>Next (In Progress)</h3>
+            <ul>
+              <li>Ranker integration using local model state</li>
+              <li>Drift detector (short vs long window divergence)</li>
+              <li>Replay and anti-collapse constraints</li>
+              <li>Resource-aware update scheduler</li>
+            </ul>
+          </div>
+          <div class="arrow">→</div>
+          <div class="node">
+            <h3>Future (Research Goals)</h3>
+            <ul>
+              <li>Full ablation and benchmark protocol</li>
+              <li>TinyML model/state compression path</li>
+              <li>STM32 feasibility experiments</li>
+              <li>Cross-domain reproducibility claims</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="card span-6">
+        <h2>Chosen Approach</h2>
+        <h3>Baseline to Advanced Path</h3>
+        <ol>
+          <li><strong>CL-v1 baseline:</strong> lightweight local learner + event-driven updates.</li>
+          <li><strong>CL-v2:</strong> replay + drift-aware update schedule.</li>
+          <li><strong>CL-v3:</strong> anti-collapse constraints + resource-optimized adaptation.</li>
+          <li><strong>TinyML track:</strong> compact representation for future STM32 transfer.</li>
+        </ol>
+      </section>
+
+      <section class="card span-6">
+        <h2>Why This Approach</h2>
+        <ul>
+          <li>Scientific control: clear baseline and ablations.</li>
+          <li>Deployment realism: can run in production app constraints.</li>
+          <li>Privacy-by-design: local processing as first principle, not add-on.</li>
+          <li>Transferability: method claims based on efficiency and adaptation, not RSS semantics.</li>
+        </ul>
+      </section>
+
+      <section class="card span-12">
+        <h2>Evaluation Contract (Primary Metrics)</h2>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Dimension</th>
+              <th>What We Measure</th>
+              <th>Why It Matters</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Utility</td>
+              <td>Ranking quality, engagement outcomes</td>
+              <td>Confirms personalization value</td>
+            </tr>
+            <tr>
+              <td>Adaptation</td>
+              <td>Recovery speed after drift</td>
+              <td>Validates continual learning behavior</td>
+            </tr>
+            <tr>
+              <td>Latency</td>
+              <td>Inference/update runtime on device</td>
+              <td>Determines deployability in real UX</td>
+            </tr>
+            <tr>
+              <td>Footprint</td>
+              <td>RAM use, model size, storage growth</td>
+              <td>Sets transfer feasibility to constrained targets</td>
+            </tr>
+            <tr>
+              <td>Power</td>
+              <td>Battery and thermal overhead</td>
+              <td>Ensures practical long-term operation</td>
+            </tr>
+            <tr>
+              <td>Privacy</td>
+              <td>Data locality and export surface audit</td>
+              <td>Supports privacy-by-design claims</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card span-4">
+        <h2>Now</h2>
+        <p class="status-now">Completed</p>
+        <ul>
+          <li>Local interaction schema and persistence</li>
+          <li>Reader session capture</li>
+          <li>Settings for local learning governance</li>
+        </ul>
+      </section>
+
+      <section class="card span-4">
+        <h2>Near Term</h2>
+        <p class="status-next">Next Sprint</p>
+        <ul>
+          <li>Feed ranking integration</li>
+          <li>Drift detector implementation</li>
+          <li>Ablation-ready instrumentation</li>
+        </ul>
+      </section>
+
+      <section class="card span-4">
+        <h2>Later</h2>
+        <p class="status-next">Research Expansion</p>
+        <ul>
+          <li>TinyML compression study</li>
+          <li>STM32 feasibility prototype</li>
+          <li>Cross-app transfer validation</li>
+        </ul>
+      </section>
+    </div>
+  </div>
+</body>
+</html>
