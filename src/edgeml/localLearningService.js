@@ -81,6 +81,9 @@ export async function recordImpression(article, context = {}) {
       filter: context.filter ?? 'all',
       sortOrder: context.sortOrder ?? 'newest',
       source: context.source ?? 'feed_list',
+      titleLength: context.titleLength ?? null,
+      hasImage: context.hasImage ?? null,
+      language: context.language ?? null,
     },
   });
 }
@@ -95,18 +98,58 @@ export async function recordOpen(article, context = {}) {
       filter: context.filter ?? 'all',
       sortOrder: context.sortOrder ?? 'newest',
       source: context.source ?? 'feed_list',
+      action: context.action ?? 'preview', // 'preview' or 'read_in_app' or 'browser'
+      titleLength: context.titleLength ?? null,
+      language: context.language ?? null,
     },
   });
 }
 
-export async function startReadSession(article) {
+export async function startReadSession(article, metadata = {}) {
   const sessions = await readJson(STORAGE_KEYS.ACTIVE_SESSIONS, {});
   sessions[article.id] = {
     startedAt: Date.now(),
     maxScrollPercent: 0,
     article: buildArticleSnapshot(article),
+    language: metadata.language ?? null,
+    contentLength: metadata.contentLength ?? null,
+    translationUsed: false,
+    readAloudUsed: false,
+    noteTaken: false,
   };
   await writeJson(STORAGE_KEYS.ACTIVE_SESSIONS, sessions);
+}
+
+export async function recordFeatureUsage(articleId, feature) {
+  const sessions = await readJson(STORAGE_KEYS.ACTIVE_SESSIONS, {});
+  const session = sessions[articleId];
+  if (!session) return;
+
+  if (feature === 'translate') session.translationUsed = true;
+  if (feature === 'read_aloud') session.readAloudUsed = true;
+  if (feature === 'note') session.noteTaken = true;
+
+  await writeJson(STORAGE_KEYS.ACTIVE_SESSIONS, sessions);
+}
+
+export async function recordSearchQuery(query) {
+  await appendEvent({
+    type: 'search',
+    at: toIsoNow(),
+    context: { query },
+  });
+}
+
+export async function recordStageTransition(fromStage, toStage, dwellSeconds = 0) {
+  await appendEvent({
+    type: 'stage_transition',
+    at: toIsoNow(),
+    context: {
+      from: fromStage, // 'feed', 'preview', 'reader'
+      to: toStage,
+      dwellSeconds,
+    },
+  });
 }
 
 export async function updateReadSessionScroll(articleId, scrollPercent) {
@@ -133,6 +176,11 @@ export async function finishReadSession(articleId) {
     at: toIsoNow(),
     article: session.article,
     context: {
+      language: session.language ?? null,
+      contentLength: session.contentLength ?? null,
+      translationUsed: session.translationUsed ?? false,
+      readAloudUsed: session.readAloudUsed ?? false,
+      noteTaken: session.noteTaken ?? false,
       dwellSeconds,
       maxScrollPercent: session.maxScrollPercent || 0,
       completed,

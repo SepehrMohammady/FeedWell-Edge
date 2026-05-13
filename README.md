@@ -33,14 +33,24 @@ Visual architecture and roadmap page:
 
 - [docs/guide/approach-blueprint.html](docs/guide/approach-blueprint.html)
 
+## User Engagement Model
+
+Research-grounded observation of real user behavior in RSS readers identified three stages:
+
+1. **Feed Tab (Stage 1):** Article browsing with filtering, sorting, searching, and scrolling. Dwell time correlates with subject interest, title length, and language.
+2. **Article Preview (Stage 2):** Decision point showing article snippet. Actions: read in app, open browser, save, share, or return.
+3. **Reader (Stage 3):** Full article consumption with optional translate, read-aloud, notes, bookmark features.
+
+Signal extraction spans all stages with metadata capture: language, title length, content length, feature usage, stage transitions.
+
 ## Selected Implementation Approach (Current)
 
 Phase-aligned strategy:
 
-1. Local event pipeline: impression, open, dwell/scroll-depth session events.
-2. Lightweight continual learner baseline with bounded replay.
+1. Enhanced event pipeline: impression, open, read-session with feature usage, search, stage-transition events.
+2. Lightweight continual learner baseline with bounded replay and behavioral context.
 3. Drift-aware update scheduling and anti-collapse controls.
-4. Deployment-focused evaluation loop with strict efficiency metrics.
+4. Deployment-focused evaluation loop with strict efficiency metrics (latency, footprint, power, privacy).
 5. TinyML transfer readiness for future STM32 deployment.
 
 ## Efficiency-Centric Evaluation Targets
@@ -55,12 +65,16 @@ All experiments should report:
 
 ## Repository Workflow Requirements
 
-For each change set:
+For each change set (v2.0.2+):
 
-1. Update implementation and documentation artifacts together.
-2. Keep README, paper sources, and guidance page synchronized.
-3. Export paper PDF after paper changes.
-4. Commit and push all updates to this repository.
+1. Bump version in: `src/config/version.js`, `package.json`, `app.json`.
+2. Update documentation: README, paper (if methodology changes), guide, related-work matrix.
+3. Export paper PDF: `pdflatex main.tex` in docs/paper/.
+4. Build Android release: `cd android; .\gradlew assembleRelease`.
+5. Install on device (if available): `adb install -r android/app/build/outputs/apk/release/app-release.apk`.
+6. Commit and push all updates.
+
+This synchronized workflow prevents drift between code and documentation.
 
 ## Build and Run
 
@@ -80,7 +94,7 @@ cd android
 
 Research track version baseline is now in the 2.x line.
 
-- Current version target for this update cycle: **2.0.1**
+- Current version target for this update cycle: **2.0.2**
 
 Version sync script:
 
