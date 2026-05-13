@@ -10,7 +10,7 @@
 \usepackage{graphicx}
 
 \title{On-Device Continual Personalization for RSS Readers: A TinyML Approach to Privacy-Preserving Recommendation}
-\author{Sepehr Mohammady \\ Elios Lab, University of Genova}
+\author{}
 \date{\today}
 
 \begin{document}
@@ -60,6 +60,26 @@ TODO: Formalize efficiency-first claims with measurable thresholds for inference
 \subsection{System Architecture}
 TODO: Add architecture figure and component breakdown.
 
+\subsection{User Behavior Model}
+Based on empirical observation of real user interactions with RSS readers, we identify three distinct engagement stages:
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{Stage 1 (Feed Tab):} Browsing list of articles with filtering (all/read/unread), sorting (date), search, and implicit scroll-based item exposure. Users spend time proportional to subject interest, title characteristics, and content language.
+\item \textbf{Stage 2 (Article Preview):} Decision point where user views article snippet (title, image, description) and chooses an action: open in browser, read in app, save for later, share, or return.
+\item \textbf{Stage 3 (Reader):} Full article consumption with available features: translate, read-aloud, notes, bookmark, share, and save. Reading speed and dwell time correlate with character count, language, and content quality.
+\end{itemize}
+, stage-transition, search
+Behavioral signals extracted at each stage inform the continual learner. Stage transitions and feature usage (e.g., translation, read-aloud, annotations) serve as learning labels and engagement proxies.
+
+\subsection{Signal Extraction Schema}
+\begin{itemize}[leftmargin=*]
+\item \textbf{Impressions:} Article rank, filter, sort order, title length, image presence, detected language.
+\item \textbf{Opens:} Action type (preview, read-in-app, browser), article metadata.
+\item \textbf{Read sessions:} Dwell time, max scroll depth, feature usage (translate, read-aloud, notes), content language and length.
+\item \textbf{Search:} Query string for intent inference (future work).
+\item \textbf{Stage transitions:} Entry/exit timestamps and dwell per stage.
+\end{itemize}
+
 \subsection{Selected Implementation Approach (Current)}
 \begin{itemize}[leftmargin=*]
 \item \textbf{Phase A (current):} Lightweight local continual learner with event-driven updates and bounded replay, fully on-device.
@@ -108,6 +128,8 @@ TODO: Utility, diversity, drift resilience, energy, memory, and latency.
 
 \section{Preliminary Implementation Status}
 \begin{itemize}[leftmargin=*]
+\item v2.0.2: Enhanced event schema to capture stage transitions, feature usage (translate, read-aloud, notes), and article metadata (language, title length, content length).
+\item v2.0.2: Integrated user behavior model from empirical observation into signal extraction.
 \item v2.0.1: Added local on-device interaction event pipeline in app code.
 \item v2.0.1: Added feed-level impression/open logging and reader dwell-depth session logging.
 \item v2.0.1: Added settings controls for local learning enablement, retention, summary, and reset.

@@ -187,6 +187,66 @@
       </section>
 
       <section class="card span-12">
+        <h2>User Engagement Model (3-Stage Journey)</h2>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>User Activity</th>
+              <th>Signals Captured</th>
+              <th>Available Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>1. Feed Tab</strong></td>
+              <td>Browse article list, filter, sort, search, scroll</td>
+              <td>Impression rank, filter choice, sort order, title length, image presence, language, search queries, dwell time</td>
+              <td>Open preview, ambient sounds, share, save</td>
+            </tr>
+            <tr>
+              <td><strong>2. Preview</strong></td>
+              <td>View article snippet, decide action</td>
+              <td>Preview dwell, action type (read-in-app / browser / back)</td>
+              <td>Read in app, open browser, share, save, return to feed</td>
+            </tr>
+            <tr>
+              <td><strong>3. Reader</strong></td>
+              <td>Read full article, use features</td>
+              <td>Scroll depth, feature usage (translate, read-aloud, notes), dwell time, completion signal</td>
+              <td>Translate, read-aloud, notes, bookmark, share, save, open browser</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card span-12">
+        <h2>Behavioral Insights (From User Research)</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+          <div class="node">
+            <h3>Stage 1 Dwell Factors</h3>
+            <ul>
+              <li>Subject interest</li>
+              <li>Title length</li>
+              <li>Language (native vs non-native)</li>
+              <li>Image presence</li>
+              <li>Feed source familiarity</li>
+            </ul>
+          </div>
+          <div class="node">
+            <h3>Stage 3 Reading Factors</h3>
+            <ul>
+              <li>Character count</li>
+              <li>Language (native vs non-native)</li>
+              <li>Content complexity</li>
+              <li>Feature usage (TTS, translate)</li>
+              <li>Reading goal (completion vs skim)</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="card span-12">
         <h2>Evaluation Contract (Primary Metrics)</h2>
         <table class="table">
           <thead>
