@@ -1,0 +1,101 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{graphicx}
+
+\title{FeedWell-Edge: Privacy-by-Design On-Device Continual Learning for RSS Recommendation}
+\author{Sepehr Mohammady \\ Elios Lab, University of Genova}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This draft proposes FeedWell-Edge, an on-device recommender system for RSS reading that performs continual personalization using only local user behavior. The objective is to mitigate model collapse and privacy risks by keeping interaction logs, feature extraction, adaptation, and model updates entirely on-device. The work targets Android first and is designed to remain compatible with future TinyML transfer constraints for STM32-class hardware.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+\subsection{Problem Statement}
+TODO: Define the practical and scientific problem in RSS recommendation under privacy and resource constraints.
+
+\subsection{Motivation}
+TODO: Explain why local-only continual learning is needed and where cloud-first recommenders fail for this context.
+
+\subsection{Contributions}
+TODO: Add concrete contributions after first stable experiment cycle.
+
+\section{Background and State of the Art}
+\subsection{On-Device Recommender Systems}
+TODO: Summarize key approaches from the DeviceRS survey.
+
+\subsection{Continual Learning at the Edge}
+TODO: Summarize edge continual training assumptions and limits.
+
+\subsection{TinyML Online Learning}
+TODO: Extract STM32-relevant constraints and lessons from TinyOL.
+
+\subsection{Privacy-by-Design in Mobile Systems}
+TODO: Map privacy principles to this architecture.
+
+\section{Research Gap and Novelty}
+\subsection{Gaps in Related Work}
+TODO: Fill from matrix in related-work-matrix.md.
+
+\subsection{Proposed Novelty}
+TODO: Define novelty claims and boundary conditions.
+
+\section{Methodology}
+\subsection{System Architecture}
+TODO: Add architecture figure and component breakdown.
+
+\subsection{Local Interaction Pipeline}
+TODO: Define events (impression, open, read-session) and retention policy.
+
+\subsection{Continual Learning Strategy}
+TODO: Describe baseline learner, replay, drift logic, and anti-collapse safeguards.
+
+\subsection{Privacy Model}
+TODO: Threat model and guarantees for local-only design.
+
+\section{Experimental Protocol}
+\subsection{Research Questions and Hypotheses}
+TODO: Add RQ1--RQn and corresponding hypotheses.
+
+\subsection{Datasets and Real-Usage Collection}
+TODO: Describe realistic data collection without mock data.
+
+\subsection{Baselines and Ablations}
+TODO: Static baseline vs CL-v1 and ablations.
+
+\subsection{Metrics}
+TODO: Utility, diversity, drift resilience, energy, memory, and latency.
+
+\section{Preliminary Implementation Status}
+\begin{itemize}[leftmargin=*]
+\item v1.6.23: Added local on-device interaction event pipeline in app code.
+\item v1.6.23: Added feed-level impression/open logging and reader dwell-depth session logging.
+\item v1.6.23: Added settings controls for local learning enablement, retention, summary, and reset.
+\end{itemize}
+
+\section{Threats to Validity}
+TODO: Internal, external, construct, and conclusion validity.
+
+\section{Ethics and Privacy Considerations}
+TODO: User consent, transparency, and local data governance.
+
+\section{Conclusion and Next Steps}
+TODO: Summarize expected outcomes and near-term milestones.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
