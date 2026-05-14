@@ -80,11 +80,24 @@ Behavioral signals extracted at each stage inform the continual learner. Stage t
 \item \textbf{Stage transitions:} Entry/exit timestamps and dwell per stage.
 \end{itemize}
 
+\subsection{Efficiency Cascade: Joint Optimization of Architecture, Quantization, and Learning}
+\label{sec:efficiency-cascade}
+
+The research strategy centers on a three-tier efficiency pipeline designed to make local continual learning feasible on resource-constrained mobile and embedded platforms:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Architecture Search (µNAS):} Automated discovery of minimal-footprint models under strict phone/microcontroller latency and memory budgets. Reframe RSS recommendation as lightweight decision operations (topic scoring, ranking) rather than end-to-end black-box models.
+\item \textbf{Weight Quantization (BNN):} Binarization of learned weights and activations reduces model size by 8-32x and speeds inference on low-power hardware. Evaluate utility loss (ranking quality) versus compression gain (storage, latency, power).
+\item \textbf{Continual Learning (CL + TinyOL):} On-device incremental adaptation of the quantized model using bounded replay and drift-aware scheduling. Target $<100$ms update latency per user event.
+\end{enumerate}
+
+\textbf{Expected Outcome:} Smartphone recommendation model $< 5\text{MB}$, inference $< 50\text{ms}$, update $< 100\text{ms}$, with validated transfer to STM32 microcontroller.
+
 \subsection{Selected Implementation Approach (Current)}
 \begin{itemize}[leftmargin=*]
 \item \textbf{Phase A (current):} Lightweight local continual learner with event-driven updates and bounded replay, fully on-device.
-\item \textbf{Phase B:} Drift-aware adaptation policy using short-term vs long-term behavior divergence with update scheduling.
-\item \textbf{Phase C:} TinyML transfer track with compact model/state representation aligned with STM32 constraints.
+\item \textbf{Phase B (near-term):} Constrained architecture search (µNAS-inspired) combined with binarized weight quantization (BNN) to reduce model footprint 8-32x. Validate on-device inference latency and update cost under phone constraints.
+\item \textbf{Phase C (research goal):} TinyML transfer track with compact model/state representation aligned with STM32 constraints. Cross-device evaluation to validate generalization.
 \end{itemize}
 
 \subsection{Local Interaction Pipeline}
@@ -130,6 +143,7 @@ TODO: Utility, diversity, drift resilience, energy, memory, and latency.
 \begin{itemize}[leftmargin=*]
 \item v2.0.2: Enhanced event schema to capture stage transitions, feature usage (translate, read-aloud, notes), and article metadata (language, title length, content length).
 \item v2.0.2: Integrated user behavior model from empirical observation into signal extraction.
+\item v2.0.2: Added strategy for efficiency cascade: µNAS (architecture search) + BNN (weight quantization) + CL (continual learning).
 \item v2.0.1: Added local on-device interaction event pipeline in app code.
 \item v2.0.1: Added feed-level impression/open logging and reader dwell-depth session logging.
 \item v2.0.1: Added settings controls for local learning enablement, retention, summary, and reset.

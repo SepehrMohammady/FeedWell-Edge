@@ -45,13 +45,11 @@ Signal extraction spans all stages with metadata capture: language, title length
 
 ## Selected Implementation Approach (Current)
 
-Phase-aligned strategy:
+Phase-aligned strategy grounded in **Efficiency Cascade** (Architecture Search + Quantization + Learning):
 
-1. Enhanced event pipeline: impression, open, read-session with feature usage, search, stage-transition events.
-2. Lightweight continual learner baseline with bounded replay and behavioral context.
-3. Drift-aware update scheduling and anti-collapse controls.
-4. Deployment-focused evaluation loop with strict efficiency metrics (latency, footprint, power, privacy).
-5. TinyML transfer readiness for future STM32 deployment.
+1. **Phase A (now)**: Local event pipeline with lightweight continual learner, bounded replay.
+2. **Phase B (near-term)**: Constrained architecture search (µNAS-inspired) + binarized weight quantization (BNN) to achieve 8-32x compression. Validate phone-side inference latency (<50ms) and update cost (<100ms).
+3. **Phase C (research goal)**: Cross-device transfer with STM32 microcontroller; validate reproducibility and generalization claims.
 
 ## Efficiency-Centric Evaluation Targets
 

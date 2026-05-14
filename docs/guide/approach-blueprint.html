@@ -167,13 +167,15 @@
 
       <section class="card span-6">
         <h2>Chosen Approach</h2>
-        <h3>Baseline to Advanced Path</h3>
+        <h3>Baseline to Advanced Path (Efficiency Cascade)</h3>
         <ol>
-          <li><strong>CL-v1 baseline:</strong> lightweight local learner + event-driven updates.</li>
-          <li><strong>CL-v2:</strong> replay + drift-aware update schedule.</li>
-          <li><strong>CL-v3:</strong> anti-collapse constraints + resource-optimized adaptation.</li>
-          <li><strong>TinyML track:</strong> compact representation for future STM32 transfer.</li>
+          <li><strong>Phase A (now):</strong> lightweight local learner + event-driven updates.</li>
+          <li><strong>Phase B (near):</strong> µNAS-inspired architecture search + BNN weight quantization (8-32x compression).</li>
+          <li><strong>Phase C (research):</strong> cross-device transfer to STM32; validate reproducibility and generalization.</li>
         </ol>
+        <p style="font-size: 0.9rem; color: #5f6b76; margin-top: 10px;">
+          <strong>Efficiency target:</strong> Phone model &lt;5MB, inference &lt;50ms, update &lt;100ms.
+        </p>
       </section>
 
       <section class="card span-6">
@@ -305,9 +307,9 @@
         <h2>Near Term</h2>
         <p class="status-next">Next Sprint</p>
         <ul>
-          <li>Feed ranking integration</li>
-          <li>Drift detector implementation</li>
-          <li>Ablation-ready instrumentation</li>
+          <li>µNAS: Constrained architecture search.</li>
+          <li>BNN: Weight quantization (8-32x compression).</li>
+          <li>Joint latency/memory validation on device.</li>
         </ul>
       </section>
 
@@ -315,9 +317,9 @@
         <h2>Later</h2>
         <p class="status-next">Research Expansion</p>
         <ul>
-          <li>TinyML compression study</li>
-          <li>STM32 feasibility prototype</li>
-          <li>Cross-app transfer validation</li>
+          <li>Cross-device transfer (phone → STM32).</li>
+          <li>Reproducibility & generalization validation.</li>
+          <li>Publish efficiency-focused findings.</li>
         </ul>
       </section>
     </div>
