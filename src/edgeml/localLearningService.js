@@ -70,6 +70,24 @@ function toIsoNow() {
   return new Date().toISOString();
 }
 
+function summarizeEventsByDay(events = [], lookbackDays = 14) {
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const counters = {};
+
+  events.forEach((evt) => {
+    const ts = new Date(evt?.at).getTime();
+    if (!Number.isFinite(ts)) return;
+    if (now - ts > lookbackDays * dayMs) return;
+    const day = new Date(ts).toISOString().split('T')[0];
+    counters[day] = (counters[day] || 0) + 1;
+  });
+
+  return Object.entries(counters)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, count]) => ({ date, count }));
+}
+
 function buildArticleSnapshot(article = {}) {
   return {
     id: article.id,
@@ -413,6 +431,71 @@ export async function getLocalLearningSummary() {
       maxDivergence: Number(Number(drift?.maxDivergence || 0).toFixed(4)),
       threshold: Number(drift?.config?.threshold || DRIFT_CONFIG.threshold),
       lastComputedAt: drift?.lastComputedAt || null,
+    },
+  };
+}
+
+export async function getLocalLearningTelemetrySnapshot() {
+  const events = await readJson(STORAGE_KEYS.EVENTS, []);
+  const activeSessions = await readJson(STORAGE_KEYS.ACTIVE_SESSIONS, {});
+  const state = await readJson(STORAGE_KEYS.MODEL_STATE, createDefaultModelState());
+  const cursor = await readJson(STORAGE_KEYS.CURSOR, 0);
+
+  const byType = events.reduce((acc, evt) => {
+    const type = evt?.type || 'unknown';
+    acc[type] = (acc[type] || 0) + 1;
+    return acc;
+  }, {});
+
+  const topicWeights = state?.topicWeights || {};
+  const topTopics = Object.entries(topicWeights)
+    .sort((a, b) => Number(b?.[1] || 0) - Number(a?.[1] || 0))
+    .slice(0, 5)
+    .map(([topic, score]) => ({ topic, score: Number(Number(score || 0).toFixed(3)) }));
+
+  const driftSignals = state?.drift?.topicSignals || {};
+  const strongestDriftTopics = Object.entries(driftSignals)
+    .sort((a, b) => Number(b?.[1]?.divergence || 0) - Number(a?.[1]?.divergence || 0))
+    .slice(0, 5)
+    .map(([topic, signal]) => ({
+      topic,
+      divergence: Number(Number(signal?.divergence || 0).toFixed(4)),
+      eventCount: Number(signal?.eventCount || 0),
+      lastUpdatedAt: signal?.lastUpdatedAt || null,
+    }));
+
+  const serializedEventsBytes = JSON.stringify(events).length;
+  const serializedStateBytes = JSON.stringify(state).length;
+
+  return {
+    generatedAt: toIsoNow(),
+    schemaVersion: 1,
+    retentionPolicy: {
+      maxStoredEvents: MAX_STORED_EVENTS,
+      cursor,
+      unprocessedEvents: Math.max(0, events.length - Number(cursor || 0)),
+    },
+    totals: {
+      eventCount: events.length,
+      activeSessionCount: Object.keys(activeSessions || {}).length,
+      modelUpdatedAt: state?.updatedAt || null,
+      modelTopicCount: Object.keys(topicWeights).length,
+    },
+    byType,
+    eventsLast14Days: summarizeEventsByDay(events, 14),
+    topTopics,
+    drift: {
+      flaggedTopics: Array.isArray(state?.drift?.flaggedTopics) ? state.drift.flaggedTopics : [],
+      strongestTopics: strongestDriftTopics,
+      eventCount: Number(state?.drift?.eventCount || 0),
+      maxDivergence: Number(Number(state?.drift?.maxDivergence || 0).toFixed(4)),
+      threshold: Number(state?.drift?.config?.threshold || DRIFT_CONFIG.threshold),
+      lastComputedAt: state?.drift?.lastComputedAt || null,
+    },
+    storageEstimate: {
+      eventsBytes: serializedEventsBytes,
+      modelStateBytes: serializedStateBytes,
+      totalBytes: serializedEventsBytes + serializedStateBytes,
     },
   };
 }

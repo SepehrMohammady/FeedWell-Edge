@@ -139,6 +139,8 @@
               <li>Local event capture: impression/open/read-session</li>
               <li>Dwell time + scroll-depth signals</li>
               <li>On-device state updates and retention controls</li>
+              <li>Drift-aware feed ranking priorities</li>
+              <li>Telemetry snapshot export from Settings</li>
               <li>No user behavior export to cloud</li>
             </ul>
           </div>
@@ -146,9 +148,9 @@
           <div class="node">
             <h3>Next (In Progress)</h3>
             <ul>
-              <li>Ranker integration using local model state</li>
-              <li>Drift detector (short vs long window divergence)</li>
-              <li>Replay and anti-collapse constraints</li>
+              <li>Pilot study protocol and consent workflow</li>
+              <li>Structured latency and battery instrumentation</li>
+              <li>Experiment dashboard from local snapshots</li>
               <li>Resource-aware update scheduler</li>
             </ul>
           </div>
@@ -186,6 +188,52 @@
           <li>Privacy-by-design: local processing as first principle, not add-on.</li>
           <li>Transferability: method claims based on efficiency and adaptation, not RSS semantics.</li>
         </ul>
+      </section>
+
+      <section class="card span-12">
+        <h2>Pilot Readiness Gate (Testing + Monitoring)</h2>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Gate</th>
+              <th>Status</th>
+              <th>Verification Path</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Local data collection</td>
+              <td><span class="status-now">Ready</span></td>
+              <td>Enable EdgeML in Settings and verify event counters in Local Summary.</td>
+            </tr>
+            <tr>
+              <td>Real-time on-device training</td>
+              <td><span class="status-now">Ready</span></td>
+              <td>Open/read sessions trigger incremental updates and drift recomputation locally.</td>
+            </tr>
+            <tr>
+              <td>Monitoring export for pilot analysis</td>
+              <td><span class="status-now">Ready</span></td>
+              <td>Use <em>Export Telemetry Snapshot</em> in Settings to save structured JSON metrics.</td>
+            </tr>
+            <tr>
+              <td>Formal experiment instrumentation</td>
+              <td><span class="status-next">Pending</span></td>
+              <td>Add automatic latency/battery traces and aggregate reporting for multi-user studies.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="card span-12">
+        <h2>How to Run Pilot Collection</h2>
+        <ol>
+          <li>Enable <strong>On-Device Learning (EdgeML)</strong> in Settings.</li>
+          <li>Use the app normally (browse, open, read, translate, save) to generate real interactions.</li>
+          <li>Refresh <strong>Local Summary (7 days)</strong> to check event growth and top topics.</li>
+          <li>Use <strong>Export Telemetry Snapshot</strong> at checkpoints (daily or session-end).</li>
+          <li>Analyze snapshots for drift, topic shifts, and storage growth without exporting raw browsing histories.</li>
+        </ol>
       </section>
 
       <section class="card span-12">
@@ -300,6 +348,7 @@
           <li>Local interaction schema and persistence</li>
           <li>Reader session capture</li>
           <li>Settings for local learning governance</li>
+          <li>Telemetry snapshot export for pilot monitoring</li>
         </ul>
       </section>
 
