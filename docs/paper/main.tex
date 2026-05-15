@@ -119,7 +119,7 @@ The baseline learner is an event-driven additive updater over topic-specific pre
 \item \textbf{Replay model:} Incremental cursor replay applies updates only to newly recorded events since last step.
 \item \textbf{Stability guardrails:} Topic weights are clamped to bounded range to avoid runaway growth and collapse.
 \item \textbf{Drift detector (implemented):} For each topic, short-window and long-window EMAs of update deltas are tracked; divergence is computed as $|EMA_{short}-EMA_{long}|$.
-\item \textbf{Drift alerting:} Topics whose divergence exceeds threshold after minimum evidence are marked as drift-flagged for downstream ranking/scheduling policies.
+\item \textbf{Drift alerting:} Topics whose divergence exceeds threshold after minimum evidence are marked as drift-flagged and receive temporary priority boost in the feed ranking policy, with scheduler integration remaining future work.
 \end{itemize}
 
 \subsection{Efficiency and Footprint Constraints}
@@ -157,6 +157,7 @@ TODO: Utility, diversity, drift resilience, energy, memory, and latency.
 
 \section{Preliminary Implementation Status}
 \begin{itemize}[leftmargin=*]
+\item v2.0.4: Integrated learned topic weights and drift-flagged topic boosts into feed ranking when on-device learning is enabled.
 \item v2.0.3: Added on-device drift detector using short-vs-long EMA divergence per topic with thresholded topic-level flags.
 \item v2.0.2: Enhanced event schema to capture stage transitions, feature usage (translate, read-aloud, notes), and article metadata (language, title length, content length).
 \item v2.0.2: Integrated user behavior model from empirical observation into signal extraction.

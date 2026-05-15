@@ -79,6 +79,20 @@ function buildArticleSnapshot(article = {}) {
   };
 }
 
+function buildRankingProfile(state = createDefaultModelState()) {
+  const topicWeights = { ...(state?.topicWeights || {}) };
+  const drift = state?.drift || {};
+  const topicSignals = { ...(drift?.topicSignals || {}) };
+  const flaggedTopics = Array.isArray(drift?.flaggedTopics) ? drift.flaggedTopics : [];
+
+  return {
+    topicWeights,
+    topicSignals,
+    flaggedTopics,
+    updatedAt: state?.updatedAt || null,
+  };
+}
+
 async function appendEvent(event) {
   const events = await readJson(STORAGE_KEYS.EVENTS, []);
   events.push(event);
@@ -336,6 +350,28 @@ export async function getDriftSummary() {
     lastComputedAt: drift?.lastComputedAt || null,
     threshold: Number(drift?.config?.threshold || DRIFT_CONFIG.threshold),
   };
+}
+
+export async function getFeedRankingProfile() {
+  const state = await readJson(STORAGE_KEYS.MODEL_STATE, createDefaultModelState());
+  return buildRankingProfile(state);
+}
+
+export function scoreArticleForRanking(article, rankingProfile = {}) {
+  const topic = getTopicFromArticle(article);
+  const topicWeight = Number(rankingProfile?.topicWeights?.[topic] || 0);
+  const divergence = Number(rankingProfile?.topicSignals?.[topic]?.divergence || 0);
+  const isDriftFlagged = Array.isArray(rankingProfile?.flaggedTopics) && rankingProfile.flaggedTopics.includes(topic);
+
+  const publishedAt = new Date(article?.publishedDate || article?.pubDate || 0).getTime();
+  const hoursSincePublished = Number.isFinite(publishedAt)
+    ? Math.max(0, (Date.now() - publishedAt) / (1000 * 60 * 60))
+    : 72;
+  const freshnessBoost = Math.max(0, 1.5 - Math.min(hoursSincePublished / 48, 1.5));
+  const unreadBoost = article?.isRead ? 0 : 0.35;
+  const driftBoost = isDriftFlagged ? Math.max(0.4, divergence * 3) : 0;
+
+  return Number((topicWeight + driftBoost + freshnessBoost + unreadBoost).toFixed(4));
 }
 
 export async function getLocalLearningSummary() {

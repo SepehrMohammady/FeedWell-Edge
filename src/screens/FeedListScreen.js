@@ -24,7 +24,7 @@ import SaveButton from '../components/SaveButton';
 import ReadingPositionIndicator from '../components/ReadingPositionIndicator';
 import CustomAlert from '../components/CustomAlert';
 import { useAmbientSound } from '../context/AmbientSoundContext';
-import { recordImpression, recordOpen, runContinualLearningStep, purgeExpiredEvents } from '../edgeml/localLearningService';
+import { getFeedRankingProfile, recordImpression, recordOpen, runContinualLearningStep, purgeExpiredEvents, scoreArticleForRanking } from '../edgeml/localLearningService';
 
 export default function FeedListScreen({ navigation, route }) {
   const { feeds, articles, loading, addArticles, setLoading, setError, markAllRead, markAllUnread, markArticleRead, markArticleUnread, getUnreadCount, getReadCount, readingPosition, setReadingPosition, clearReadingPosition } = useFeed();
@@ -36,6 +36,7 @@ export default function FeedListScreen({ navigation, route }) {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedArticles, setSelectedArticles] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const [rankingProfile, setRankingProfile] = useState({ topicWeights: {}, topicSignals: {}, flaggedTopics: [], updatedAt: null });
   const flatListRef = useRef(null);
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', icon: null, buttons: [] });
   const seenImpressionIdsRef = useRef(new Set());
@@ -57,6 +58,32 @@ export default function FeedListScreen({ navigation, route }) {
     if (!onDeviceLearningEnabled) return;
     purgeExpiredEvents(onDeviceLearningRetentionDays);
   }, [onDeviceLearningEnabled, onDeviceLearningRetentionDays]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      let active = true;
+
+      const loadRankingProfile = async () => {
+        if (!onDeviceLearningEnabled) {
+          if (active) {
+            setRankingProfile({ topicWeights: {}, topicSignals: {}, flaggedTopics: [], updatedAt: null });
+          }
+          return;
+        }
+
+        const profile = await getFeedRankingProfile();
+        if (active) {
+          setRankingProfile(profile);
+        }
+      };
+
+      loadRankingProfile();
+
+      return () => {
+        active = false;
+      };
+    }, [onDeviceLearningEnabled, forceRender, articles.length])
+  );
 
   // Force re-render when screen comes into focus to update read status
   useFocusEffect(
@@ -479,13 +506,13 @@ export default function FeedListScreen({ navigation, route }) {
     // Apply read status filter
     switch (articleFilter) {
       case 'unread':
-        filtered = articles.filter(article => !article.isRead);
+        filtered = filtered.filter(article => !article.isRead);
         break;
       case 'read':
-        filtered = articles.filter(article => article.isRead);
+        filtered = filtered.filter(article => article.isRead);
         break;
       default:
-        filtered = articles;
+        break;
     }
 
     // Apply search filter
@@ -498,12 +525,23 @@ export default function FeedListScreen({ navigation, route }) {
       );
     }
 
-    // Sort articles
-    if (sortOrder === 'newest') {
-      return filtered.sort((a, b) => new Date(b.publishedDate) - new Date(a.publishedDate));
-    } else {
-      return filtered.sort((a, b) => new Date(a.publishedDate) - new Date(b.publishedDate));
+    const sorted = [...filtered];
+
+    if (onDeviceLearningEnabled && sortOrder === 'newest') {
+      return sorted.sort((a, b) => {
+        const scoreDiff = scoreArticleForRanking(b, rankingProfile) - scoreArticleForRanking(a, rankingProfile);
+        if (Math.abs(scoreDiff) > 0.0001) {
+          return scoreDiff;
+        }
+        return new Date(b.publishedDate) - new Date(a.publishedDate);
+      });
     }
+
+    if (sortOrder === 'newest') {
+      return sorted.sort((a, b) => new Date(b.publishedDate) - new Date(a.publishedDate));
+    }
+
+    return sorted.sort((a, b) => new Date(a.publishedDate) - new Date(b.publishedDate));
   };
 
   const filteredAndSortedArticles = getFilteredArticles();
