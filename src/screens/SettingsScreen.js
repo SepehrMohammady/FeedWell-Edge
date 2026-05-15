@@ -45,7 +45,7 @@ import {
   downloadModel,
   deleteModel,
 } from '../utils/translationService';
-import { clearAllLocalLearningData, getLocalLearningSummary, purgeExpiredEvents } from '../edgeml/localLearningService';
+import { clearAllLocalLearningData, getLocalLearningSummary, getLocalLearningTelemetrySnapshot, purgeExpiredEvents } from '../edgeml/localLearningService';
 
 export default function SettingsScreen({ navigation }) {
   const { feeds, articles, clearAllData } = useFeed();
@@ -123,6 +123,66 @@ export default function SettingsScreen({ navigation }) {
         },
       ],
     });
+  };
+
+  const handleExportLearningSnapshot = async () => {
+    try {
+      const snapshot = await getLocalLearningTelemetrySnapshot();
+      const jsonString = JSON.stringify(snapshot, null, 2);
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0];
+      const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-');
+      const fileName = `FeedWell_EdgeML_Snapshot_${dateStr}_${timeStr}.json`;
+
+      if (Platform.OS === 'web') {
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      } else {
+        const fileUri = `${FileSystem.documentDirectory}${fileName}`;
+        await FileSystem.writeAsStringAsync(fileUri, jsonString);
+        const isAvailable = await Sharing.isAvailableAsync();
+        if (isAvailable) {
+          await Sharing.shareAsync(fileUri, {
+            mimeType: 'application/json',
+            dialogTitle: 'Export EdgeML Telemetry Snapshot',
+            UTI: 'public.json',
+          });
+        } else {
+          setAlertConfig({
+            visible: true,
+            title: 'Snapshot Saved',
+            message: `Saved to ${fileUri}`,
+            icon: 'checkmark-circle-outline',
+            buttons: [{ text: 'OK' }],
+          });
+          return;
+        }
+      }
+
+      setAlertConfig({
+        visible: true,
+        title: 'Snapshot Exported',
+        message: 'EdgeML telemetry snapshot exported successfully.',
+        icon: 'checkmark-circle-outline',
+        buttons: [{ text: 'OK' }],
+      });
+    } catch (error) {
+      console.error('Error exporting telemetry snapshot:', error);
+      setAlertConfig({
+        visible: true,
+        title: 'Export Failed',
+        message: 'Could not export telemetry snapshot. Please try again.',
+        icon: 'alert-circle-outline',
+        buttons: [{ text: 'OK' }],
+      });
+    }
   };
 
   const handleChangeDefaultLang = async (langCode) => {
@@ -1236,6 +1296,12 @@ export default function SettingsScreen({ navigation }) {
             description={learningSummary ? `${learningSummary.eventsLast7Days} events • top topic: ${learningSummary.topTopics?.[0]?.topic || 'n/a'}` : 'No local learning data yet'}
             onPress={refreshLearningSummary}
             rightElement={<Ionicons name="analytics-outline" size={20} color={theme.colors.primary} />}
+          />
+          <SettingItem
+            title="Export Telemetry Snapshot"
+            description="Save structured local metrics for pilot monitoring"
+            onPress={handleExportLearningSnapshot}
+            rightElement={<Ionicons name="document-text-outline" size={20} color={theme.colors.primary} />}
           />
           <SettingItem
             title="Reset Local Learning"
