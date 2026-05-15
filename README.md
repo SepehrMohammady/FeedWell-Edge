@@ -93,7 +93,7 @@ cd android
 Research track version baseline is now in the 2.x line.
 
 - Current version target for this update cycle: **2.0.2**
-- Current version target for this update cycle: **2.0.3**
+- Current version target for this update cycle: **2.0.4**
 
 Version sync script:
 
