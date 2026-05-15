@@ -25,13 +25,19 @@ This draft proposes an on-device recommender framework for RSS reading that perf
 
 \section{Introduction}
 \subsection{Problem Statement}
-TODO: Define the practical and scientific problem in RSS recommendation under privacy and resource constraints.
+RSS recommendation in mobile reading applications must adapt to changing user interests while respecting strict privacy and efficiency constraints. The practical problem is that useful personalization requires frequent behavioral feedback, yet exporting detailed reading traces to remote servers introduces privacy risk and weakens deployability in bandwidth-limited or offline settings. The scientific problem is therefore to determine whether a lightweight recommender can learn continuously from on-device interactions, remain responsive under mobile resource budgets, and preserve acceptable ranking quality under concept drift.
 
 \subsection{Motivation}
-TODO: Explain why local-only continual learning is needed and where cloud-first recommenders fail for this context.
+Local-only continual learning is motivated by three constraints. First, RSS reading behavior is highly non-stationary: short-term interests can change rapidly across topics, languages, and reading contexts. Second, cloud-first recommenders typically assume centralized logging, delayed retraining, and persistent connectivity, all of which conflict with privacy-preserving mobile use. Third, app-level deployment requires bounded storage, update cost, and battery impact rather than only offline ranking accuracy. For this reason, the present work prioritizes a fully local adaptation loop before introducing heavier model classes.
 
 \subsection{Contributions}
-TODO: Add concrete contributions after first stable experiment cycle.
+Current contributions of the implementation-oriented phase are as follows:
+
+\begin{itemize}[leftmargin=*]
+\item A deployable Android RSS reader with fully local interaction capture for impressions, opens, read sessions, search, and stage transitions.
+\item A lightweight continual learner that starts from an empty user profile, updates topic weights incrementally, detects drift using short-vs-long exponential moving averages, and feeds those signals back into ranking.
+\item A deployment-first research protocol that treats latency, storage growth, battery cost, and future STM32 transferability as first-class evaluation criteria.
+\end{itemize}
 
 \section{Background and State of the Art}
 \subsection{On-Device Recommender Systems}
@@ -48,13 +54,20 @@ TODO: Map privacy principles to this architecture.
 
 \section{Research Gap and Novelty}
 \subsection{Gaps in Related Work}
-TODO: Fill from matrix in related-work-matrix.md.
+The related-work matrix highlights a consistent deployment gap. Existing work discusses on-device recommendation, edge continual learning, TinyML online adaptation, and privacy-by-design, but these strands are rarely integrated into a single app-embedded personalization loop with explicit runtime budgets. Prior work also tends to emphasize either conceptual taxonomy, microcontroller feasibility, or privacy architecture in isolation. What remains underexplored is a reproducible mobile recommender that learns locally from real user behavior, exposes measurable storage and update overhead, and preserves a clean transfer path to smaller embedded targets.
 
 \subsection{Proposed Novelty}
-TODO: Define novelty claims and boundary conditions.
+The novelty claim of this work is not a new large-scale recommender architecture. Instead, it is the joint design of a privacy-preserving, drift-aware, deployment-constrained continual personalization loop embedded inside an RSS reader. The boundary condition is explicit: the current phase uses lightweight topic-level state and starts from scratch per user rather than relying on a pretrained global model. More expressive neural and quantized architectures remain future phases once the local baseline is validated empirically.
 
 \subsection{Deployment-Centric Claims}
-TODO: Formalize efficiency-first claims with measurable thresholds for inference latency, online update overhead, memory footprint, and battery impact.
+The deployment-centric claims of the project are defined by measurable thresholds rather than accuracy alone:
+
+\begin{itemize}[leftmargin=*]
+\item Feed ranking and re-ranking should remain interactive, with target inference cost below 50ms per refresh on a commodity smartphone.
+\item Online updates should remain lightweight enough for event-driven execution, with target update latency below 100ms per incremental learning step.
+\item Persistent recommender state should remain compact enough for long-running local use, with bounded event retention and sub-megabyte model-state overhead in the baseline phase.
+\item Privacy guarantees should hold without exporting raw behavior traces or model updates off-device during the baseline study.
+\end{itemize}
 
 \section{Methodology}
 \subsection{System Architecture}
@@ -68,7 +81,7 @@ Based on empirical observation of real user interactions with RSS readers, we id
 \item \textbf{Stage 2 (Article Preview):} Decision point where user views article snippet (title, image, description) and chooses an action: open in browser, read in app, save for later, share, or return.
 \item \textbf{Stage 3 (Reader):} Full article consumption with available features: translate, read-aloud, notes, bookmark, share, and save. Reading speed and dwell time correlate with character count, language, and content quality.
 \end{itemize}
-, stage-transition, search
+
 Behavioral signals extracted at each stage inform the continual learner. Stage transitions and feature usage (e.g., translation, read-aloud, annotations) serve as learning labels and engagement proxies.
 
 \subsection{Signal Extraction Schema}
@@ -123,29 +136,49 @@ The baseline learner is an event-driven additive updater over topic-specific pre
 \end{itemize}
 
 \subsection{Efficiency and Footprint Constraints}
-TODO: Report budgeted constraints and observed values:
+Current budget targets are fixed, while observed values remain to be measured in the pilot study:
 \begin{itemize}[leftmargin=*]
-\item Inference latency per ranked item and per list refresh.
-\item Local update latency and scheduling frequency.
-\item Memory and persistent storage footprint growth over time.
-\item Battery and thermal overhead in realistic usage sessions.
+\item \textbf{Inference latency target:} below 50ms per feed refresh under typical list sizes.
+\item \textbf{Update latency target:} below 100ms per incremental learning step triggered by new interactions.
+\item \textbf{Storage target:} bounded event store (currently 5000 records) and compact topic-level model state.
+\item \textbf{Observed-values TODO:} add measured latency, storage growth, battery drain, and thermal observations from controlled pilot sessions.
 \end{itemize}
 
 \subsection{Privacy Model}
-TODO: Threat model and guarantees for local-only design.
+The baseline privacy model assumes a semi-honest device environment but no trusted remote personalization service. Interaction events, topic weights, drift statistics, and retention controls remain local to the device through app-managed storage. The main privacy guarantee is therefore zero intentional export of raw behavioral traces for training. Remaining threats include device compromise, local backup leakage, and future telemetry additions; these must be handled explicitly before any broader deployment study.
 
 \section{Experimental Protocol}
 \subsection{Research Questions and Hypotheses}
-TODO: Add RQ1--RQn and corresponding hypotheses.
+The current draft is organized around four core questions:
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{RQ1:} Can a local continual learner that starts from scratch improve ranking utility relative to non-personalized baselines during real RSS use?
+\item \textbf{RQ2:} Does drift-aware ranking improve adaptation speed when user interests shift across topics?
+\item \textbf{RQ3:} Can these gains be achieved under strict mobile latency, storage, and battery constraints?
+\item \textbf{RQ4:} Does a strict local-only pipeline remain practical without degrading user experience or requiring cloud-side coordination?
+\end{itemize}
+
+Expected hypotheses are $H_1$: continual local adaptation outperforms static ordering, $H_2$: drift-aware prioritization shortens recovery after preference shifts, and $H_3$: the lightweight baseline remains within the stated deployment budgets.
 
 \subsection{Datasets and Real-Usage Collection}
-TODO: Describe realistic data collection without mock data.
+The system is already suitable for pilot-scale real-usage collection. When on-device learning is enabled, the application records local interaction events in real time and updates the user model incrementally. No pretrained model is required for this phase; each user can begin from an empty topic-weight profile and accumulate personalized state through normal reading behavior. The intended protocol is a staged deployment: first, single-user longitudinal testing to validate logging and update stability; second, a small pilot with consenting users over multiple weeks; third, controlled drift scenarios to measure recovery speed. A remaining TODO is to define the exact participant count, study duration, and feed selection policy for the first formal experiment.
 
 \subsection{Baselines and Ablations}
-TODO: Static baseline vs CL-v1 and ablations.
+The baseline and ablation plan should separate personalization gains from architectural complexity:
+
+\begin{itemize}[leftmargin=*]
+\item Reverse-chronological ordering with no personalization.
+\item Topic-weight ranking without continual updates after initialization.
+\item Continual learner without drift-based boosts.
+\item Continual learner with drift-based boosts enabled.
+\item Future ablation: warm-start initialization from a pretrained prior versus pure from-scratch learning.
+\end{itemize}
 
 \subsection{Metrics}
-TODO: Utility, diversity, drift resilience, energy, memory, and latency.
+Primary metrics should include feed open-through rate, read-session completion rate, dwell-weighted engagement, adaptation delay after detected drift, ranking freshness, storage growth, update latency, and battery cost. Because this is a deployability-focused study, every utility metric should be paired with an efficiency metric rather than reported alone.
+
+\subsection{Observability and Monitoring}
+Current monitoring exists at two levels. First, the app persists local event logs, model state, and drift statistics in device storage. Second, the settings screen exposes a summary view containing recent event counts, top learned topics, and strongest drift signals, while runtime failures are surfaced through local console warnings and errors during development. A concrete TODO for the next revision is to export structured experiment snapshots (for example, anonymized local summaries, latency traces, and battery observations) so that pilot results can be analyzed reproducibly without uploading raw interaction histories.
 
 \subsection{Primary Evaluation Targets}
 \begin{itemize}[leftmargin=*]
@@ -168,13 +201,13 @@ TODO: Utility, diversity, drift resilience, energy, memory, and latency.
 \end{itemize}
 
 \section{Threats to Validity}
-TODO: Internal, external, construct, and conclusion validity.
+The main internal-validity risk is that early gains may reflect interface recency or feed composition rather than genuine personalization. External validity is limited because the present implementation targets one RSS-reader workflow and one mobile stack. Construct validity depends on whether opens, dwell time, and scroll depth are adequate proxies for utility. Conclusion validity will remain weak until the pilot includes enough users and sufficiently long sessions to characterize drift, stability, and resource cost under realistic behavior.
 
 \section{Ethics and Privacy Considerations}
-TODO: User consent, transparency, and local data governance.
+All user studies should require explicit consent, a visible explanation that personalization occurs locally, and an in-app reset path that clears behavioral history and model state. Because the pipeline is designed to avoid remote export of raw traces, ethical emphasis shifts toward transparency, retention limits, and ensuring that optional experiment summaries do not re-identify users. A remaining TODO is to specify the consent screen wording and any institutional review requirements for the first pilot.
 
 \section{Conclusion and Next Steps}
-TODO: Summarize expected outcomes and near-term milestones.
+The project has reached the point where real-time local data collection and from-scratch continual adaptation are feasible inside the app. The next technical milestone is not C or microcontroller deployment yet; it is a monitored pilot that measures whether the current JavaScript-based baseline improves ranking quality under real use while staying within mobile resource budgets. Immediate next steps are to add structured observability for latency and battery, define the pilot protocol, and then use those findings to justify the later transition toward µNAS, BNN, and STM32-oriented implementation constraints.
 
 \bibliographystyle{plain}
 \bibliography{references}
