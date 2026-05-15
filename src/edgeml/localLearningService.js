@@ -7,11 +7,28 @@ const STORAGE_KEYS = {
   CURSOR: 'edgeml_cursor_v1',
 };
 
-const DEFAULT_MODEL_STATE = {
-  version: 1,
-  topicWeights: {},
-  updatedAt: null,
+const DRIFT_CONFIG = {
+  shortAlpha: 0.3,
+  longAlpha: 0.05,
+  threshold: 0.35,
+  minEventsPerTopic: 5,
 };
+
+function createDefaultModelState() {
+  return {
+    version: 1,
+    topicWeights: {},
+    updatedAt: null,
+    drift: {
+      config: { ...DRIFT_CONFIG },
+      topicSignals: {},
+      flaggedTopics: [],
+      eventCount: 0,
+      maxDivergence: 0,
+      lastComputedAt: null,
+    },
+  };
+}
 
 const MAX_STORED_EVENTS = 5000;
 
@@ -207,10 +224,19 @@ export async function purgeExpiredEvents(retentionDays = 30) {
 export async function runContinualLearningStep() {
   const events = await readJson(STORAGE_KEYS.EVENTS, []);
   const cursor = await readJson(STORAGE_KEYS.CURSOR, 0);
-  const state = await readJson(STORAGE_KEYS.MODEL_STATE, DEFAULT_MODEL_STATE);
+  const defaultState = createDefaultModelState();
+  const state = await readJson(STORAGE_KEYS.MODEL_STATE, defaultState);
+  const baseDrift = state?.drift || {};
   const nextState = {
+    ...defaultState,
     ...state,
     topicWeights: { ...(state.topicWeights || {}) },
+    drift: {
+      ...defaultState.drift,
+      ...baseDrift,
+      topicSignals: { ...(baseDrift.topicSignals || {}) },
+      flaggedTopics: Array.isArray(baseDrift.flaggedTopics) ? [...baseDrift.flaggedTopics] : [],
+    },
   };
 
   let processed = 0;
@@ -231,9 +257,48 @@ export async function runContinualLearningStep() {
 
     if (delta !== 0) {
       nextState.topicWeights[topic] = clamp(current + delta, -20, 20);
+
+      const previousSignal = nextState.drift.topicSignals[topic] || {
+        shortEma: 0,
+        longEma: 0,
+        divergence: 0,
+        lastDelta: 0,
+        eventCount: 0,
+        lastUpdatedAt: null,
+      };
+
+      const shortEma =
+        DRIFT_CONFIG.shortAlpha * delta +
+        (1 - DRIFT_CONFIG.shortAlpha) * Number(previousSignal.shortEma || 0);
+      const longEma =
+        DRIFT_CONFIG.longAlpha * delta +
+        (1 - DRIFT_CONFIG.longAlpha) * Number(previousSignal.longEma || 0);
+      const divergence = Math.abs(shortEma - longEma);
+
+      nextState.drift.topicSignals[topic] = {
+        shortEma,
+        longEma,
+        divergence,
+        lastDelta: delta,
+        eventCount: Number(previousSignal.eventCount || 0) + 1,
+        lastUpdatedAt: evt?.at || toIsoNow(),
+      };
+      nextState.drift.eventCount = Number(nextState.drift.eventCount || 0) + 1;
+      nextState.drift.maxDivergence = Math.max(Number(nextState.drift.maxDivergence || 0), divergence);
     }
     processed += 1;
   }
+
+  nextState.drift.flaggedTopics = Object.entries(nextState.drift.topicSignals || {})
+    .filter(([, signal]) => {
+      const eventCount = Number(signal?.eventCount || 0);
+      const divergence = Number(signal?.divergence || 0);
+      return eventCount >= DRIFT_CONFIG.minEventsPerTopic && divergence >= DRIFT_CONFIG.threshold;
+    })
+    .sort((a, b) => Number(b?.[1]?.divergence || 0) - Number(a?.[1]?.divergence || 0))
+    .map(([topic]) => topic)
+    .slice(0, 5);
+  nextState.drift.lastComputedAt = toIsoNow();
 
   nextState.updatedAt = toIsoNow();
   await writeJson(STORAGE_KEYS.MODEL_STATE, nextState);
@@ -243,12 +308,39 @@ export async function runContinualLearningStep() {
     processedEvents: processed,
     totalEvents: events.length,
     updatedAt: nextState.updatedAt,
+    driftFlaggedTopics: nextState.drift.flaggedTopics,
+    driftMaxDivergence: Number(Number(nextState.drift.maxDivergence || 0).toFixed(4)),
+  };
+}
+
+export async function getDriftSummary() {
+  const state = await readJson(STORAGE_KEYS.MODEL_STATE, createDefaultModelState());
+  const drift = state?.drift || {};
+  const topicSignals = drift?.topicSignals || {};
+  const strongestTopics = Object.entries(topicSignals)
+    .sort((a, b) => Number(b?.[1]?.divergence || 0) - Number(a?.[1]?.divergence || 0))
+    .slice(0, 3)
+    .map(([topic, signal]) => ({
+      topic,
+      divergence: Number(Number(signal?.divergence || 0).toFixed(4)),
+      shortEma: Number(Number(signal?.shortEma || 0).toFixed(4)),
+      longEma: Number(Number(signal?.longEma || 0).toFixed(4)),
+      eventCount: Number(signal?.eventCount || 0),
+    }));
+
+  return {
+    flaggedTopics: Array.isArray(drift?.flaggedTopics) ? drift.flaggedTopics : [],
+    strongestTopics,
+    maxDivergence: Number(Number(drift?.maxDivergence || 0).toFixed(4)),
+    eventCount: Number(drift?.eventCount || 0),
+    lastComputedAt: drift?.lastComputedAt || null,
+    threshold: Number(drift?.config?.threshold || DRIFT_CONFIG.threshold),
   };
 }
 
 export async function getLocalLearningSummary() {
   const events = await readJson(STORAGE_KEYS.EVENTS, []);
-  const state = await readJson(STORAGE_KEYS.MODEL_STATE, DEFAULT_MODEL_STATE);
+  const state = await readJson(STORAGE_KEYS.MODEL_STATE, createDefaultModelState());
   const now = Date.now();
   const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
@@ -263,12 +355,29 @@ export async function getLocalLearningSummary() {
     .slice(0, 3)
     .map(([topic, score]) => ({ topic, score: Number(score.toFixed(2)) }));
 
+  const drift = state?.drift || {};
+  const strongestDriftTopics = Object.entries(drift?.topicSignals || {})
+    .sort((a, b) => Number(b?.[1]?.divergence || 0) - Number(a?.[1]?.divergence || 0))
+    .slice(0, 3)
+    .map(([topic, signal]) => ({
+      topic,
+      divergence: Number(Number(signal?.divergence || 0).toFixed(4)),
+      eventCount: Number(signal?.eventCount || 0),
+    }));
+
   return {
     totalEvents: events.length,
     eventsLast7Days: sevenDays.length,
     byType,
     modelUpdatedAt: state.updatedAt,
     topTopics,
+    drift: {
+      flaggedTopics: Array.isArray(drift?.flaggedTopics) ? drift.flaggedTopics : [],
+      strongestTopics: strongestDriftTopics,
+      maxDivergence: Number(Number(drift?.maxDivergence || 0).toFixed(4)),
+      threshold: Number(drift?.config?.threshold || DRIFT_CONFIG.threshold),
+      lastComputedAt: drift?.lastComputedAt || null,
+    },
   };
 }
 

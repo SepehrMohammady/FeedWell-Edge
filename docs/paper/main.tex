@@ -91,7 +91,7 @@ The research strategy centers on a three-tier efficiency pipeline designed to ma
 \item \textbf{Continual Learning (CL + TinyOL):} On-device incremental adaptation of the quantized model using bounded replay and drift-aware scheduling. Target $<100$ms update latency per user event.
 \end{enumerate}
 
-\textbf{Expected Outcome:} Smartphone recommendation model $< 5\text{MB}$, inference $< 50\text{ms}$, update $< 100\text{ms}$, with validated transfer to STM32 microcontroller.
+\textbf{Expected Outcome:} Smartphone recommendation model below 5MB, inference below 50ms, update below 100ms, with validated transfer to STM32 microcontroller.
 
 \subsection{Selected Implementation Approach (Current)}
 \begin{itemize}[leftmargin=*]
@@ -101,10 +101,26 @@ The research strategy centers on a three-tier efficiency pipeline designed to ma
 \end{itemize}
 
 \subsection{Local Interaction Pipeline}
-TODO: Define events (impression, open, read-session) and retention policy.
+The local interaction pipeline is currently implemented as an event log with bounded replay capacity and explicit retention controls.
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{Event families:} \texttt{impression}, \texttt{open}, \texttt{read\_session}, \texttt{search}, and \texttt{stage\_transition}.
+\item \textbf{Session enrichment:} Reader sessions store dwell time, max scroll depth, completion signal, and feature usage flags (translation, read-aloud, note-taking).
+\item \textbf{Bounded storage:} Event buffer is capped to 5000 records to prevent unbounded growth.
+\item \textbf{Retention policy:} Time-based pruning is supported (default 30 days; configurable to longer windows in settings).
+\item \textbf{Cursor-based replay:} Continual updates process only unseen events via persistent cursor, reducing repeated compute overhead.
+\end{itemize}
 
 \subsection{Continual Learning Strategy}
-TODO: Describe baseline learner, replay, drift logic, and anti-collapse safeguards.
+The baseline learner is an event-driven additive updater over topic-specific preference weights.
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{Signal-to-update mapping:} opens provide positive intent signal; read sessions add dwell-depth-completion weighted reinforcement.
+\item \textbf{Replay model:} Incremental cursor replay applies updates only to newly recorded events since last step.
+\item \textbf{Stability guardrails:} Topic weights are clamped to bounded range to avoid runaway growth and collapse.
+\item \textbf{Drift detector (implemented):} For each topic, short-window and long-window EMAs of update deltas are tracked; divergence is computed as $|EMA_{short}-EMA_{long}|$.
+\item \textbf{Drift alerting:} Topics whose divergence exceeds threshold after minimum evidence are marked as drift-flagged for downstream ranking/scheduling policies.
+\end{itemize}
 
 \subsection{Efficiency and Footprint Constraints}
 TODO: Report budgeted constraints and observed values:
@@ -141,6 +157,7 @@ TODO: Utility, diversity, drift resilience, energy, memory, and latency.
 
 \section{Preliminary Implementation Status}
 \begin{itemize}[leftmargin=*]
+\item v2.0.3: Added on-device drift detector using short-vs-long EMA divergence per topic with thresholded topic-level flags.
 \item v2.0.2: Enhanced event schema to capture stage transitions, feature usage (translate, read-aloud, notes), and article metadata (language, title length, content length).
 \item v2.0.2: Integrated user behavior model from empirical observation into signal extraction.
 \item v2.0.2: Added strategy for efficiency cascade: µNAS (architecture search) + BNN (weight quantization) + CL (continual learning).
