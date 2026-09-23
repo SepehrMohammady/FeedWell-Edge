@@ -54,3 +54,6 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+
+# Play Console files (store listing CSV, release notes), kept locally only
+store/
