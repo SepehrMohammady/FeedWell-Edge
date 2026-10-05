@@ -8,20 +8,20 @@ const ThemeContext = createContext();
 
 // Five palettes for light mode — varies primary, accent, warning, error
 export const LIGHT_PALETTES = [
-  { name: 'Warm Beige', primary: '#A17F66', accent: '#5F758E', warning: '#CB936A', error: '#CD9C8B' },
-  { name: 'Sage',       primary: '#5A8A6A', accent: '#4A7060', warning: '#7AAB7E', error: '#90B09A' },
-  { name: 'Sky',        primary: '#4A7BA7', accent: '#365E80', warning: '#6699CC', error: '#88A8C0' },
-  { name: 'Lavender',   primary: '#7B6BA8', accent: '#5B4E8A', warning: '#9D8CC4', error: '#B0A4C8' },
-  { name: 'Rose',       primary: '#A8606A', accent: '#7D4E58', warning: '#C48070', error: '#CFA0A0' },
+  { name: 'Warm Beige', nameKey: 'color.warmBeige', primary: '#A17F66', accent: '#5F758E', warning: '#CB936A', error: '#CD9C8B' },
+  { name: 'Sage',       nameKey: 'color.sage',      primary: '#5A8A6A', accent: '#4A7060', warning: '#7AAB7E', error: '#90B09A' },
+  { name: 'Sky',        nameKey: 'color.sky',       primary: '#4A7BA7', accent: '#365E80', warning: '#6699CC', error: '#88A8C0' },
+  { name: 'Lavender',   nameKey: 'color.lavender',  primary: '#7B6BA8', accent: '#5B4E8A', warning: '#9D8CC4', error: '#B0A4C8' },
+  { name: 'Rose',       nameKey: 'color.rose',      primary: '#A8606A', accent: '#7D4E58', warning: '#C48070', error: '#CFA0A0' },
 ];
 
 // Five palettes for dark mode
 export const DARK_PALETTES = [
-  { name: 'Warm Beige', primary: '#CDADA0', accent: '#758793', warning: '#CD9E7A', error: '#D6AD9D' },
-  { name: 'Sage',       primary: '#8AC4A0', accent: '#6A9E80', warning: '#9ABBA4', error: '#A4C4AE' },
-  { name: 'Sky',        primary: '#80AECE', accent: '#6090B8', warning: '#8AB6CE', error: '#A0BED6' },
-  { name: 'Lavender',   primary: '#A898C8', accent: '#8A7AB8', warning: '#B8A8D8', error: '#C4B8D0' },
-  { name: 'Rose',       primary: '#D6A0A8', accent: '#B88090', warning: '#D4A080', error: '#D8B4B4' },
+  { name: 'Warm Beige', nameKey: 'color.warmBeige', primary: '#CDADA0', accent: '#758793', warning: '#CD9E7A', error: '#D6AD9D' },
+  { name: 'Sage',       nameKey: 'color.sage',      primary: '#8AC4A0', accent: '#6A9E80', warning: '#9ABBA4', error: '#A4C4AE' },
+  { name: 'Sky',        nameKey: 'color.sky',       primary: '#80AECE', accent: '#6090B8', warning: '#8AB6CE', error: '#A0BED6' },
+  { name: 'Lavender',   nameKey: 'color.lavender',  primary: '#A898C8', accent: '#8A7AB8', warning: '#B8A8D8', error: '#C4B8D0' },
+  { name: 'Rose',       nameKey: 'color.rose',      primary: '#D6A0A8', accent: '#B88090', warning: '#D4A080', error: '#D8B4B4' },
 ];
 
 const baseLightColors = {
@@ -59,6 +59,16 @@ const lightShadows = {
   cardWeb: { boxShadow: '0 2px 8px rgba(0,0,0,0.1)' },
 };
 
+// AMOLED variant of the dark palette: surfaces drop to true black so OLED
+// pixels switch off entirely. Since card and background become identical, the
+// border is lifted to stay visible — it is what separates cards now.
+const baseAmoledColors = {
+  ...baseDarkColors,
+  surface: '#000000',
+  card: '#000000',
+  border: '#2A2A2C',
+};
+
 const darkShadows = {
   card: {
     shadowColor: '#000',
@@ -78,6 +88,7 @@ const buildTheme = (baseColors, shadows, palette) => ({
 export function ThemeProvider({ children }) {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [paletteIndex, setPaletteIndex] = useState(0);
+  const [amoledBlack, setAmoledBlack] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -92,10 +103,12 @@ export function ThemeProvider({ children }) {
 
   const loadThemePreference = async () => {
     try {
-      const [savedTheme, savedPalette] = await Promise.all([
+      const [savedTheme, savedPalette, savedAmoled] = await Promise.all([
         AsyncStorage.getItem('theme'),
         AsyncStorage.getItem('paletteIndex'),
+        AsyncStorage.getItem('amoledBlack'),
       ]);
+      if (savedAmoled !== null) setAmoledBlack(savedAmoled === 'true');
       if (savedTheme !== null) {
         setIsDarkMode(savedTheme === 'dark');
         syncWidgetTheme(savedTheme === 'dark');
@@ -123,6 +136,15 @@ export function ThemeProvider({ children }) {
     }
   };
 
+  const toggleAmoledBlack = async (value) => {
+    try {
+      setAmoledBlack(value);
+      await AsyncStorage.setItem('amoledBlack', value ? 'true' : 'false');
+    } catch (error) {
+      console.error('Error saving AMOLED preference:', error);
+    }
+  };
+
   const setPalette = async (index) => {
     try {
       setPaletteIndex(index);
@@ -133,13 +155,15 @@ export function ThemeProvider({ children }) {
   };
 
   const theme = isDarkMode
-    ? buildTheme(baseDarkColors,  darkShadows,  DARK_PALETTES[paletteIndex])
+    ? buildTheme(amoledBlack ? baseAmoledColors : baseDarkColors, darkShadows, DARK_PALETTES[paletteIndex])
     : buildTheme(baseLightColors, lightShadows, LIGHT_PALETTES[paletteIndex]);
 
   const value = {
     theme,
     isDarkMode,
     toggleTheme,
+    amoledBlack,
+    toggleAmoledBlack,
     isLoading,
     paletteIndex,
     setPalette,

@@ -25,11 +25,17 @@ import ReadingPositionIndicator from '../components/ReadingPositionIndicator';
 import CustomAlert from '../components/CustomAlert';
 import { useAmbientSound } from '../context/AmbientSoundContext';
 import { getFeedRankingProfile, recordImpression, recordOpen, runContinualLearningStep, purgeExpiredEvents, scoreArticleForRanking } from '../edgeml/localLearningService';
+import { useTranslation } from '../context/LanguageContext';
+import { formatRelativeDate } from '../utils/formatDate';
+import { useAutoScroll } from '../hooks/useAutoScroll';
+import { useKeepScreenAwake } from '../hooks/useKeepScreenAwake';
+import { useTour, useTourTarget } from '../context/TourContext';
 
 export default function FeedListScreen({ navigation, route }) {
-  const { feeds, articles, loading, addArticles, setLoading, setError, markAllRead, markAllUnread, markArticleRead, markArticleUnread, getUnreadCount, getReadCount, readingPosition, setReadingPosition, clearReadingPosition } = useFeed();
+  const { feeds, articles, loading, addArticles, setLoading, setError, markAllRead, markAllUnread, markArticlesRead, markArticleRead, markArticleUnread, getUnreadCount, getReadCount, readingPosition, setReadingPosition, clearReadingPosition } = useFeed();
   const { theme } = useTheme();
-  const { showImages, articleFilter, sortOrder, updateArticleFilter, updateSortOrder, maxArticleAge, skipArticleView, showReadingPositionInFeeds, onDeviceLearningEnabled, onDeviceLearningRetentionDays } = useAppSettings();
+  const { t, isRTL, formatNumber, language } = useTranslation();
+  const { showImages, articleFilter, sortOrder, updateArticleFilter, updateSortOrder, maxArticleAge, skipArticleView, showReadingPositionInFeeds, autoScrollEnabled, autoScrollDelay, autoScrollSpeed, keepAwakeEnabled, onDeviceLearningEnabled, onDeviceLearningRetentionDays } = useAppSettings();
   const { setShowPlaylist: openSoundPlaylist } = useAmbientSound();
   const [refreshing, setRefreshing] = useState(false);
   const [forceRender, setForceRender] = useState(0);
@@ -38,8 +44,56 @@ export default function FeedListScreen({ navigation, route }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [rankingProfile, setRankingProfile] = useState({ topicWeights: {}, topicSignals: {}, flaggedTopics: [], updatedAt: null });
   const flatListRef = useRef(null);
+  // Last measured average item length reported by the FlatList (via
+  // onScrollToIndexFailed). Used instead of a hardcoded height estimate.
+  const avgItemLengthRef = useRef(null);
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', icon: null, buttons: [] });
   const seenImpressionIdsRef = useRef(new Set());
+
+  // --- Auto-scroll (Settings > Auto-Scroll, default off) ---
+  const listOffsetRef = useRef(0);
+  const listContentHeightRef = useRef(0);
+  const listViewportHeightRef = useRef(0);
+  // App tour: the controls it points at, and a pause for auto-scroll while it runs.
+  const tour = useTour();
+  const tourActiveRef = useRef(false);
+  tourActiveRef.current = !!tour?.active;
+  const tourAddRef = useTourTarget('feeds.add');
+  const tourFilterRef = useTourTarget('feeds.filter');
+  const tourSoundsRef = useTourTarget('feeds.sounds');
+  const tourSortRef = useTourTarget('feeds.sort');
+  const tourReadAllRef = useTourTarget('feeds.readAll');
+  const tourSearchRef = useTourTarget('feeds.search');
+  const tourReadingPositionRef = useTourTarget('feeds.readingPosition');
+
+  const autoScroll = useAutoScroll({
+    enabled: autoScrollEnabled,
+    delaySeconds: autoScrollDelay,
+    speedPercent: autoScrollSpeed,
+    getOffset: () => listOffsetRef.current,
+    getMaxOffset: () => Math.max(0, listContentHeightRef.current - listViewportHeightRef.current),
+    scrollTo: (y) => flatListRef.current?.scrollToOffset({ offset: y, animated: false }),
+    isBlocked: () => tourActiveRef.current,
+  });
+
+  // The tour points at the first reading-position row, so start it at the top.
+  useEffect(() => {
+    if (tour?.active) flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, [tour?.active]);
+
+  // Keep the screen on while auto-scrolling the list, so it never dims mid-scroll.
+  useKeepScreenAwake(autoScrollEnabled && keepAwakeEnabled, 'feedwell-feed-list');
+
+  // Arm while the tab is focused; fully stop on blur/unmount.
+  useFocusEffect(
+    React.useCallback(
+      () => {
+        autoScroll.arm();
+        return autoScroll.pause;
+      },
+      [autoScroll.arm, autoScroll.pause, autoScrollEnabled, autoScrollDelay, autoScrollSpeed]
+    )
+  );
 
   // Apply filter from navigation params (e.g., when clicking Unread from Home)
   useEffect(() => {
@@ -47,12 +101,6 @@ export default function FeedListScreen({ navigation, route }) {
       updateArticleFilter(route.params.filter);
     }
   }, [route?.params?.filter]);
-
-  useEffect(() => {
-    if (feeds.length > 0) {
-      refreshFeeds();
-    }
-  }, [feeds.length]);
 
   useEffect(() => {
     if (!onDeviceLearningEnabled) return;
@@ -89,37 +137,90 @@ export default function FeedListScreen({ navigation, route }) {
   useFocusEffect(
     React.useCallback(() => {
       setForceRender(prev => prev + 1);
-      
+
+      const timeouts = [];
+
       // Auto-scroll to reading position when tab becomes active
       if (readingPosition && readingPosition.afterArticleId && flatListRef.current && filteredAndSortedArticles && filteredAndSortedArticles.length > 0) {
         // Find the index of the article after which the reading position is set
         const targetIndex = filteredAndSortedArticles.findIndex(article => article.id === readingPosition.afterArticleId);
         if (targetIndex !== -1) {
-          // Wait a bit for the FlatList to render
-          setTimeout(() => {
+          // Scroll to the article after the reading position (or the reading position line)
+          const scrollIndex = Math.min(targetIndex + 1, filteredAndSortedArticles.length - 1);
+
+          const tryScrollToIndex = () => {
+            if (!flatListRef.current) return false;
             try {
-              // Scroll to the article after the reading position (or the reading position line)
-              const scrollToIndex = Math.min(targetIndex + 1, filteredAndSortedArticles.length - 1);
               flatListRef.current.scrollToIndex({
-                index: scrollToIndex,
+                index: scrollIndex,
                 animated: true,
                 viewPosition: 0.3, // Show the target item at 30% from the top
               });
+              return true;
             } catch (error) {
-              console.log('Auto-scroll failed, using offset method:', error);
-              // Fallback to offset calculation
-              const itemHeight = 150;
-              const targetOffset = (targetIndex + 1) * itemHeight;
-              flatListRef.current.scrollToOffset({
-                offset: targetOffset,
-                animated: true,
-              });
+              console.log('Auto-scroll scrollToIndex failed:', error);
+              return false;
             }
-          }, 500);
+          };
+
+          // Wait a bit for the FlatList to render
+          timeouts.push(setTimeout(() => {
+            if (!tryScrollToIndex()) {
+              // Fallback: jump near the estimated position (unanimated) so the
+              // far-away items get rendered, then retry the precise scroll.
+              // Prefer the list's own measured average item length over a guess.
+              const estimatedItemHeight = avgItemLengthRef.current || 180;
+              if (flatListRef.current) {
+                flatListRef.current.scrollToOffset({
+                  offset: scrollIndex * estimatedItemHeight,
+                  animated: false,
+                });
+              }
+              timeouts.push(setTimeout(() => {
+                if (!tryScrollToIndex()) {
+                  // With many items one retry can still land short while items
+                  // render; try once more a bit later.
+                  timeouts.push(setTimeout(tryScrollToIndex, 600));
+                }
+              }, 400));
+            }
+          }, 500));
         }
       }
-    }, [readingPosition, filteredAndSortedArticles])
+
+      return () => {
+        timeouts.forEach(clearTimeout);
+      };
+    }, [readingPosition, articles, articleFilter, sortOrder, searchQuery])
   );
+
+  // Standard RN pattern for scrollToIndex on a not-yet-rendered index with
+  // variable item heights: jump near the target using the list's measured
+  // average item length, wait for the items to render, then retry precisely.
+  const handleScrollToIndexFailed = (info) => {
+    if (info.averageItemLength) {
+      avgItemLengthRef.current = info.averageItemLength;
+    }
+    if (flatListRef.current) {
+      flatListRef.current.scrollToOffset({
+        offset: info.averageItemLength * info.index,
+        animated: false,
+      });
+    }
+    setTimeout(() => {
+      if (flatListRef.current && info.index < filteredAndSortedArticles.length) {
+        try {
+          flatListRef.current.scrollToIndex({
+            index: info.index,
+            animated: true,
+            viewPosition: 0.3,
+          });
+        } catch (error) {
+          console.log('scrollToIndex retry failed:', error);
+        }
+      }
+    }, 400);
+  };
 
   const refreshFeeds = async () => {
     if (feeds.length === 0) return;
@@ -154,7 +255,7 @@ export default function FeedListScreen({ navigation, route }) {
       console.log('=== REFRESH FEEDS DEBUG END ===');
     } catch (error) {
       setError('Failed to refresh feeds');
-      setAlertConfig({ visible: true, title: 'Error', message: 'Failed to refresh feeds. Please check your internet connection.', icon: 'wifi-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('common.error'), message: t('feedList.refreshFailed'), icon: 'wifi-outline', buttons: [{ text: t('common.ok') }] });
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -169,23 +270,23 @@ export default function FeedListScreen({ navigation, route }) {
   const handleMarkAllRead = async () => {
     const unreadCount = getUnreadCount();
     if (unreadCount === 0) {
-      setAlertConfig({ visible: true, title: 'Info', message: 'No unread articles to mark as read.', icon: 'checkmark-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('feedList.infoTitle'), message: t('feedList.noUnreadToMark'), icon: 'checkmark-circle-outline', buttons: [{ text: t('common.ok') }] });
       return;
     }
 
     const confirmAction = () => {
       markAllRead();
-      setAlertConfig({ visible: true, title: 'Success', message: `Marked ${unreadCount} articles as read.`, icon: 'checkmark-circle', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('common.success'), message: t('feedList.markedReadSuccess', { count: formatNumber(unreadCount) }), icon: 'checkmark-circle', buttons: [{ text: t('common.ok') }] });
     };
 
     setAlertConfig({
       visible: true,
-      title: 'Mark All Read',
-      message: `Mark all ${unreadCount} unread articles as read?`,
+      title: t('feedList.markAllReadTitle'),
+      message: t('feedList.markAllReadConfirm', { count: formatNumber(unreadCount) }),
       icon: 'checkmark-done-outline',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Mark All Read', onPress: confirmAction, style: 'destructive' },
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('feedList.markAllReadTitle'), onPress: confirmAction, style: 'destructive' },
       ],
     });
   };
@@ -193,23 +294,23 @@ export default function FeedListScreen({ navigation, route }) {
   const handleMarkAllUnread = async () => {
     const readCount = getReadCount();
     if (readCount === 0) {
-      setAlertConfig({ visible: true, title: 'Info', message: 'No read articles to mark as unread.', icon: 'information-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('feedList.infoTitle'), message: t('feedList.noReadToMark'), icon: 'information-circle-outline', buttons: [{ text: t('common.ok') }] });
       return;
     }
 
     const confirmAction = () => {
       markAllUnread();
-      setAlertConfig({ visible: true, title: 'Success', message: `Marked ${readCount} articles as unread.`, icon: 'checkmark-circle', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('common.success'), message: t('feedList.markedUnreadSuccess', { count: formatNumber(readCount) }), icon: 'checkmark-circle', buttons: [{ text: t('common.ok') }] });
     };
 
     setAlertConfig({
       visible: true,
-      title: 'Mark All Unread',
-      message: `Mark all ${readCount} read articles as unread?`,
+      title: t('feedList.markAllUnreadTitle'),
+      message: t('feedList.markAllUnreadConfirm', { count: formatNumber(readCount) }),
       icon: 'mail-unread-outline',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Mark All Unread', onPress: confirmAction, style: 'destructive' },
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('feedList.markAllUnreadTitle'), onPress: confirmAction, style: 'destructive' },
       ],
     });
   };
@@ -231,21 +332,7 @@ export default function FeedListScreen({ navigation, route }) {
   };
 
   const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-    const diffDays = Math.floor(diffHours / 24);
-
-    if (diffHours < 1) {
-      return 'Just now';
-    } else if (diffHours < 24) {
-      return `${diffHours}h ago`;
-    } else if (diffDays < 7) {
-      return `${diffDays}d ago`;
-    } else {
-      return date.toLocaleDateString();
-    }
+    return formatRelativeDate(dateString, t, formatNumber, language);
   };
 
   const handleArticlePress = (article) => {
@@ -274,11 +361,63 @@ export default function FeedListScreen({ navigation, route }) {
     }
   };
 
+  // Mark every article from the top of the list down to this point as read
+  // (Feedly's "mark as read above"). Uses the list as currently displayed, so
+  // "above" always means what the user actually sees above the line.
+  const handleMarkAboveRead = async (articleIndex) => {
+    const ids = filteredAndSortedArticles
+      .slice(0, articleIndex + 1)
+      .filter(a => !a.isRead)
+      .map(a => a.id);
+    if (ids.length === 0) {
+      setAlertConfig({
+        visible: true,
+        title: t('feedList.infoTitle'),
+        message: t('feedList.noUnreadToMark'),
+        icon: 'information-circle-outline',
+        buttons: [{ text: t('common.ok') }],
+      });
+      return;
+    }
+    // Where the first still-unread article sits AFTER the mark, computed from
+    // the list as it looks right now:
+    //  - "unread" filter: everything just marked disappears, so what followed
+    //    the line collapses to the top of the list.
+    //  - any other filter: the list keeps its shape, so that article stays at
+    //    its own index.
+    // Without this the viewport stayed at its old offset and the user had to
+    // scroll back to find where they had got to.
+    const nextUnreadIndex = filteredAndSortedArticles.findIndex(
+      (a, i) => i > articleIndex && !a.isRead
+    );
+
+    await markArticlesRead(ids);
+
+    if (nextUnreadIndex === -1) return; // nothing unread below — leave the view alone
+    // Let the list re-render with the new read state before moving the viewport.
+    requestAnimationFrame(() => {
+      if (!flatListRef.current) return;
+      if (articleFilter === 'unread') {
+        flatListRef.current.scrollToOffset({ offset: 0, animated: true });
+        return;
+      }
+      try {
+        flatListRef.current.scrollToIndex({
+          index: nextUnreadIndex,
+          animated: true,
+          viewPosition: 0,
+        });
+      } catch (e) {
+        // scrollToIndex can throw for a not-yet-measured row; onScrollToIndexFailed
+        // handles the retry, so a failure here is not worth surfacing.
+      }
+    });
+  };
+
   const handleSetReadingPosition = (articleIndex) => {
     const article = filteredAndSortedArticles[articleIndex];
     if (article) {
       setReadingPosition(`after_article_${article.id}`, article.id);
-      // No alert needed - the visual line indicator is sufficient
     }
   };
 
@@ -294,10 +433,10 @@ export default function FeedListScreen({ navigation, route }) {
             viewPosition: 0.3,
           });
         } catch (error) {
-          setAlertConfig({ visible: true, title: 'Reading Position', message: 'You can see your reading position marked in the list below.', icon: 'location-outline', buttons: [{ text: 'OK' }] });
+          setAlertConfig({ visible: true, title: t('feedList.readingPositionTitle'), message: t('feedList.readingPositionMarkedBelow'), icon: 'location-outline', buttons: [{ text: t('common.ok') }] });
         }
       } else {
-        setAlertConfig({ visible: true, title: 'Reading Position', message: 'The reading position article is not visible in the current filter/sort view.', icon: 'location-outline', buttons: [{ text: 'OK' }] });
+        setAlertConfig({ visible: true, title: t('feedList.readingPositionTitle'), message: t('feedList.readingPositionNotVisible'), icon: 'location-outline', buttons: [{ text: t('common.ok') }] });
       }
     }
   };
@@ -305,12 +444,12 @@ export default function FeedListScreen({ navigation, route }) {
   const handleClearReadingPosition = () => {
     setAlertConfig({
       visible: true,
-      title: 'Clear Reading Position',
-      message: 'Are you sure you want to remove the reading position line?',
+      title: t('feedList.clearReadingPositionTitle'),
+      message: t('feedList.clearReadingPositionConfirm'),
       icon: 'bookmark-outline',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Clear', style: 'destructive', onPress: clearReadingPosition },
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('feedList.clearAction'), style: 'destructive', onPress: clearReadingPosition },
       ],
     });
   };
@@ -460,6 +599,7 @@ export default function FeedListScreen({ navigation, route }) {
           )}
         </TouchableOpacity>
 
+        <View ref={index === 0 ? tourReadingPositionRef : undefined} collapsable={index !== 0}>
         {/* Show reading position line after this article if it matches */}
         {showReadingPositionInFeeds && showReadingPositionAfter && !selectionMode && (
           <ReadingPositionIndicator
@@ -473,10 +613,14 @@ export default function FeedListScreen({ navigation, route }) {
         {showReadingPositionInFeeds && !showReadingPositionAfter && !selectionMode && (
           <ReadingPositionIndicator
             onPress={() => handleSetReadingPosition(index)}
+            onMarkAbove={() => handleMarkAboveRead(index)}
             onClear={() => {}}
             isActive={false}
+            positionLabel={t('feedList.setPositionHere')}
+            markAboveLabel={t('feedList.markAboveRead')}
           />
         )}
+        </View>
       </View>
     );
   };
@@ -500,19 +644,29 @@ export default function FeedListScreen({ navigation, route }) {
       return [];
     }
     
-    // v1.1.5: Apply age filter to existing articles
-    let filtered = filterByAge(articles);
-    
+    // Age filter first; the read-status filter then narrows THAT list.
+    // (Before v1.13.0 every branch below overwrote the age-filtered list from
+    // `articles`, so the Article Age Filter never applied to the visible list.)
+    // Hidden feeds (eye toggle on the Add Feed screen) stay subscribed but
+    // their articles are kept out of this list.
+    const hiddenFeedUrls = new Set(feeds.filter(f => f.isHidden).map(f => f.url));
+    const visible = hiddenFeedUrls.size > 0
+      ? articles.filter(a => !hiddenFeedUrls.has(a.feedUrl))
+      : articles;
+    const ageFiltered = filterByAge(visible);
+
     // Apply read status filter
+    let filtered;
     switch (articleFilter) {
       case 'unread':
-        filtered = filtered.filter(article => !article.isRead);
+        filtered = ageFiltered.filter(article => !article.isRead);
         break;
       case 'read':
-        filtered = filtered.filter(article => article.isRead);
+        filtered = ageFiltered.filter(article => article.isRead);
         break;
       default:
-        break;
+        // Copy: the sort below must never mutate the articles state array.
+        filtered = [...ageFiltered];
     }
 
     // Apply search filter
@@ -525,26 +679,47 @@ export default function FeedListScreen({ navigation, route }) {
       );
     }
 
-    const sorted = [...filtered];
+    // Sort articles. Unparseable dates fall back to 0 (as everywhere else in
+    // the app) and ties break on a stable key, so the order is deterministic
+    // and can't reshuffle when the list re-renders after reading an article.
+    const timeOf = (article) => {
+      const t = new Date(article.publishedDate || 0).getTime();
+      return Number.isNaN(t) ? 0 : t;
+    };
+    const direction = sortOrder === 'newest' ? -1 : 1;
+    // On-device learning: with "newest" selected, the learned ranking score
+    // orders the list and the date breaks ties. Scores are computed once per
+    // pass so the comparator stays consistent.
+    const personalised = onDeviceLearningEnabled && sortOrder === 'newest';
+    const scoreOf = personalised
+      ? new Map(filtered.map(article => [article.id, scoreArticleForRanking(article, rankingProfile)]))
+      : null;
+    const sortedArticles = filtered.sort((a, b) => {
+      if (personalised) {
+        const scoreDiff = scoreOf.get(b.id) - scoreOf.get(a.id);
+        if (Math.abs(scoreDiff) > 0.0001) return scoreDiff;
+      }
+      const diff = timeOf(a) - timeOf(b);
+      if (diff !== 0) return direction * diff;
+      return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+    });
 
-    if (onDeviceLearningEnabled && sortOrder === 'newest') {
-      return sorted.sort((a, b) => {
-        const scoreDiff = scoreArticleForRanking(b, rankingProfile) - scoreArticleForRanking(a, rankingProfile);
-        if (Math.abs(scoreDiff) > 0.0001) {
-          return scoreDiff;
-        }
-        return new Date(b.publishedDate) - new Date(a.publishedDate);
-      });
+    // Priority feeds: articles from pinned feeds appear at the top
+    const priorityFeedUrls = new Set(feeds.filter(f => f.isPriority).map(f => f.url));
+    if (priorityFeedUrls.size > 0) {
+      const priorityArticles = sortedArticles.filter(a => priorityFeedUrls.has(a.feedUrl));
+      const regularArticles = sortedArticles.filter(a => !priorityFeedUrls.has(a.feedUrl));
+      return [...priorityArticles, ...regularArticles];
     }
-
-    if (sortOrder === 'newest') {
-      return sorted.sort((a, b) => new Date(b.publishedDate) - new Date(a.publishedDate));
-    }
-
-    return sorted.sort((a, b) => new Date(a.publishedDate) - new Date(b.publishedDate));
+    return sortedArticles;
   };
 
   const filteredAndSortedArticles = getFilteredArticles();
+  // Stable identity so FlatList only re-renders cells when something real changes.
+  const listExtraData = React.useMemo(
+    () => [articles, articleFilter, sortOrder, readingPosition?.afterArticleId],
+    [articles, articleFilter, sortOrder, readingPosition?.afterArticleId]
+  );
 
   const onViewableItemsChanged = useCallback(({ viewableItems }) => {
     if (!onDeviceLearningEnabled) return;
@@ -564,14 +739,19 @@ export default function FeedListScreen({ navigation, route }) {
 
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
 
-  const toggleFilter = () => {
-    if (articleFilter === 'all') {
-      updateArticleFilter('unread');
-    } else if (articleFilter === 'unread') {
-      updateArticleFilter('read');
-    } else {
-      updateArticleFilter('all');
-    }
+  const openFilterMenu = () => {
+    setAlertConfig({
+      visible: true,
+      title: t('feedList.filterArticlesTitle'),
+      message: t('feedList.filterArticlesMessage'),
+      icon: 'filter-outline',
+      buttons: [
+        { text: articleFilter === 'all' ? t('feedList.filterAllCurrent') : t('feedList.filterAll'), onPress: () => updateArticleFilter('all') },
+        { text: articleFilter === 'unread' ? t('feedList.filterUnreadCurrent', { count: formatNumber(getAgeFilteredUnreadCount()) }) : t('feedList.filterUnread', { count: formatNumber(getAgeFilteredUnreadCount()) }), onPress: () => updateArticleFilter('unread') },
+        { text: articleFilter === 'read' ? t('feedList.filterReadCurrent', { count: formatNumber(getAgeFilteredReadCount()) }) : t('feedList.filterRead', { count: formatNumber(getAgeFilteredReadCount()) }), onPress: () => updateArticleFilter('read') },
+        { text: t('common.cancel'), style: 'cancel' },
+      ],
+    });
   };
 
   const toggleSort = () => {
@@ -589,11 +769,11 @@ export default function FeedListScreen({ navigation, route }) {
   const getFilterButtonText = () => {
     switch (articleFilter) {
       case 'unread':
-        return `Unread (${getAgeFilteredUnreadCount()})`;
+        return t('feedList.filterUnread', { count: formatNumber(getAgeFilteredUnreadCount()) });
       case 'read':
-        return `Read (${getAgeFilteredReadCount()})`;
+        return t('feedList.filterRead', { count: formatNumber(getAgeFilteredReadCount()) });
       default:
-        return 'All';
+        return t('feedList.filterAllCount', { count: formatNumber(filterByAge(articles).length) });
     }
   };
 
@@ -607,7 +787,7 @@ export default function FeedListScreen({ navigation, route }) {
       backgroundColor: theme.colors.background,
     },
     header: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
       padding: 16,
@@ -619,6 +799,8 @@ export default function FeedListScreen({ navigation, route }) {
       fontSize: 24,
       fontWeight: 'bold',
       color: theme.colors.text,
+      textAlign: isRTL ? 'right' : 'left',
+      writingDirection: isRTL ? 'rtl' : 'ltr',
     },
     addButton: {
       alignItems: 'center',
@@ -628,18 +810,20 @@ export default function FeedListScreen({ navigation, route }) {
       minWidth: 40,
     },
     headerRightGroup: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       alignItems: 'center',
       flex: 1,
-      justifyContent: 'flex-end',
-      gap: 4,
+      justifyContent: 'space-between',
+      gap: 8,
     },
     filterPill: {
-      marginRight: 4,
+      marginRight: isRTL ? 0 : 8,
+      marginLeft: isRTL ? 8 : 0,
     },
     headerButtons: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       alignItems: 'center',
+      flexShrink: 1,
     },
     headerButton: {
       alignItems: 'center',
@@ -658,15 +842,20 @@ export default function FeedListScreen({ navigation, route }) {
       fontSize: 12,
       color: theme.colors.text,
       fontWeight: '600',
-      paddingHorizontal: 8,
-      paddingVertical: 4,
+    },
+    filterButton: {
+      flexDirection: isRTL ? 'row-reverse' : 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
       backgroundColor: theme.colors.background,
-      borderRadius: 8,
+      borderRadius: 10,
       borderWidth: 1,
       borderColor: theme.colors.text,
     },
     searchContainer: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       alignItems: 'center',
       backgroundColor: theme.colors.surface,
       marginHorizontal: 16,
@@ -678,13 +867,16 @@ export default function FeedListScreen({ navigation, route }) {
       borderColor: theme.colors.border,
     },
     searchIcon: {
-      marginRight: 8,
+      marginRight: isRTL ? 0 : 8,
+      marginLeft: isRTL ? 8 : 0,
     },
     searchInput: {
       flex: 1,
       fontSize: 16,
       color: theme.colors.text,
       paddingVertical: 4,
+      textAlign: isRTL ? 'right' : 'left',
+      writingDirection: isRTL ? 'rtl' : 'ltr',
     },
     clearSearch: {
       padding: 4,
@@ -695,22 +887,23 @@ export default function FeedListScreen({ navigation, route }) {
       marginVertical: 8,
       borderRadius: 12,
       padding: 16,
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       alignItems: 'flex-start',
       ...(Platform.OS === 'web' ? theme.shadows.cardWeb : theme.shadows.card),
     },
     articleContent: {
       flex: 1,
-      marginRight: 12,
+      marginRight: isRTL ? 0 : 12,
+      marginLeft: isRTL ? 12 : 0,
     },
     articleHeader: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
       marginBottom: 8,
     },
     titleRow: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       alignItems: 'center',
       flex: 1,
     },
@@ -719,16 +912,19 @@ export default function FeedListScreen({ navigation, route }) {
       height: 8,
       borderRadius: 4,
       backgroundColor: theme.colors.primary,
-      marginRight: 8,
+      marginRight: isRTL ? 0 : 8,
+      marginLeft: isRTL ? 8 : 0,
     },
     feedTitle: {
       fontSize: 12,
       color: theme.colors.primary,
       fontWeight: '600',
       flex: 1,
+      textAlign: isRTL ? 'right' : 'left',
+      writingDirection: isRTL ? 'rtl' : 'ltr',
     },
     articleMeta: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       alignItems: 'center',
       gap: 8,
     },
@@ -747,14 +943,19 @@ export default function FeedListScreen({ navigation, route }) {
       color: theme.colors.text,
       marginBottom: 6,
       lineHeight: 21,
+      textAlign: isRTL ? 'right' : 'left',
+      writingDirection: isRTL ? 'rtl' : 'ltr',
     },
     articleDescription: {
       fontSize: 14,
       color: theme.colors.textSecondary,
       lineHeight: 20,
+      textAlign: isRTL ? 'right' : 'left',
+      writingDirection: isRTL ? 'rtl' : 'ltr',
     },
     imageContainer: {
-      marginLeft: 12,
+      marginLeft: isRTL ? 0 : 12,
+      marginRight: isRTL ? 12 : 0,
     },
     articleImage: {
       width: 80,
@@ -767,7 +968,7 @@ export default function FeedListScreen({ navigation, route }) {
       alignItems: 'center',
     },
     imageActions: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       justifyContent: 'space-around',
       alignItems: 'center',
       marginTop: 4,
@@ -802,7 +1003,7 @@ export default function FeedListScreen({ navigation, route }) {
       marginBottom: 24,
     },
     primaryButton: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: theme.colors.primary,
@@ -818,7 +1019,7 @@ export default function FeedListScreen({ navigation, route }) {
       fontWeight: '600',
     },
     featuresContainer: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       justifyContent: 'space-around',
       width: '100%',
       paddingHorizontal: 20,
@@ -846,7 +1047,8 @@ export default function FeedListScreen({ navigation, route }) {
       height: 28,
       alignItems: 'center',
       justifyContent: 'center',
-      marginRight: 12,
+      marginRight: isRTL ? 0 : 12,
+      marginLeft: isRTL ? 12 : 0,
     },
     selectedArticle: {
       backgroundColor: theme.colors.primary + '20',
@@ -857,10 +1059,11 @@ export default function FeedListScreen({ navigation, route }) {
 
   if (feeds.length === 0) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView edges={["top", "left", "right"]} style={styles.container}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>FeedWell</Text>
           <TouchableOpacity
+            ref={tourAddRef}
             style={styles.addButton}
             onPress={() => navigation.navigate('AddFeed')}
           >
@@ -870,30 +1073,30 @@ export default function FeedListScreen({ navigation, route }) {
         
         <View style={styles.emptyState}>
           <Ionicons name="newspaper-outline" size={100} color={theme.colors.border} />
-          <Text style={styles.emptyTitle}>Welcome to FeedWell</Text>
+          <Text style={styles.emptyTitle}>{t('feedList.welcomeTitle')}</Text>
           <Text style={styles.emptyDescription}>
-            Your ad-free RSS reader. Start by adding your first feed to get clean, distraction-free articles.
+            {t('feedList.welcomeDescription')}
           </Text>
           <TouchableOpacity
             style={styles.primaryButton}
             onPress={() => navigation.navigate('AddFeed')}
           >
             <Ionicons name="add-circle-outline" size={20} color="#fff" />
-            <Text style={styles.primaryButtonText}>Add Your First Feed</Text>
+            <Text style={styles.primaryButtonText}>{t('feedList.addFirstFeed')}</Text>
           </TouchableOpacity>
-          
+
           <View style={styles.featuresContainer}>
             <View style={styles.featureItem}>
               <Ionicons name="shield-checkmark" size={24} color={theme.colors.success} />
-              <Text style={styles.featureText}>Ad-free reading</Text>
+              <Text style={styles.featureText}>{t('feedList.featureAdFree')}</Text>
             </View>
             <View style={styles.featureItem}>
               <Ionicons name="reader" size={24} color={theme.colors.primary} />
-              <Text style={styles.featureText}>Clean reader mode</Text>
+              <Text style={styles.featureText}>{t('feedList.featureReaderMode')}</Text>
             </View>
             <View style={styles.featureItem}>
               <Ionicons name="share" size={24} color={theme.colors.warning} />
-              <Text style={styles.featureText}>Easy sharing</Text>
+              <Text style={styles.featureText}>{t('feedList.featureSharing')}</Text>
             </View>
           </View>
         </View>
@@ -902,9 +1105,8 @@ export default function FeedListScreen({ navigation, route }) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={["top", "left", "right"]} style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>FeedWell</Text>
         {selectionMode ? (
           <View style={styles.headerButtons}>
             <TouchableOpacity
@@ -912,14 +1114,14 @@ export default function FeedListScreen({ navigation, route }) {
               onPress={selectAllArticles}
             >
               <Ionicons name="checkbox" size={20} color={theme.colors.text} />
-              <Text style={styles.headerButtonLabel}>All</Text>
+              <Text style={styles.headerButtonLabel}>{t('feedList.selectAll')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.headerButton}
               onPress={deselectAllArticles}
             >
               <Ionicons name="square-outline" size={20} color={theme.colors.text} />
-              <Text style={styles.headerButtonLabel}>None</Text>
+              <Text style={styles.headerButtonLabel}>{t('feedList.selectNone')}</Text>
             </TouchableOpacity>
             {(() => {
               // Check if selection contains any unread articles
@@ -945,7 +1147,7 @@ export default function FeedListScreen({ navigation, route }) {
                       disabled={selectedArticles.size === 0 || !hasUnread}
                     >
                       <Ionicons name="mail-open-outline" size={20} color={selectedArticles.size === 0 || !hasUnread ? theme.colors.disabled : theme.colors.text} />
-                      <Text style={[styles.headerButtonLabel, { color: selectedArticles.size === 0 || !hasUnread ? theme.colors.disabled : theme.colors.textSecondary }]}>Read</Text>
+                      <Text style={[styles.headerButtonLabel, { color: selectedArticles.size === 0 || !hasUnread ? theme.colors.disabled : theme.colors.textSecondary }]}>{t('feedList.markReadLabel')}</Text>
                     </TouchableOpacity>
                   )}
                   {showMarkUnread && (
@@ -955,7 +1157,7 @@ export default function FeedListScreen({ navigation, route }) {
                       disabled={selectedArticles.size === 0 || !hasRead}
                     >
                       <Ionicons name="mail-unread-outline" size={20} color={selectedArticles.size === 0 || !hasRead ? theme.colors.disabled : theme.colors.text} />
-                      <Text style={[styles.headerButtonLabel, { color: selectedArticles.size === 0 || !hasRead ? theme.colors.disabled : theme.colors.textSecondary }]}>Unread</Text>
+                      <Text style={[styles.headerButtonLabel, { color: selectedArticles.size === 0 || !hasRead ? theme.colors.disabled : theme.colors.textSecondary }]}>{t('feedList.markUnreadLabel')}</Text>
                     </TouchableOpacity>
                   )}
                 </>
@@ -966,39 +1168,44 @@ export default function FeedListScreen({ navigation, route }) {
               onPress={toggleSelectionMode}
             >
               <Ionicons name="close" size={20} color={theme.colors.text} />
-              <Text style={styles.headerButtonLabel}>Cancel</Text>
+              <Text style={styles.headerButtonLabel}>{t('common.cancel')}</Text>
             </TouchableOpacity>
           </View>
         ) : (
           <View style={styles.headerRightGroup}>
             <TouchableOpacity
-              style={styles.filterPill}
-              onPress={toggleFilter}
+              ref={tourFilterRef}
+              style={[styles.filterPill, styles.filterButton]}
+              onPress={openFilterMenu}
             >
               <Text style={styles.filterButtonText}>{getFilterButtonText()}</Text>
+              <Ionicons name="chevron-down" size={14} color={theme.colors.textSecondary} />
             </TouchableOpacity>
             <View style={styles.headerButtons}>
               <TouchableOpacity
+                ref={tourSoundsRef}
                 style={styles.headerButton}
                 onPress={() => openSoundPlaylist(true)}
               >
                 <Ionicons name="musical-notes-outline" size={20} color={theme.colors.text} />
-                <Text style={styles.headerButtonLabel}>Sounds</Text>
+                <Text style={styles.headerButtonLabel}>{t('feedList.soundsLabel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
+                ref={tourSortRef}
                 style={styles.headerButton}
                 onPress={toggleSort}
               >
                 <Ionicons name={getSortButtonIcon()} size={20} color={theme.colors.text} />
-                <Text style={styles.headerButtonLabel}>Sort</Text>
+                <Text style={styles.headerButtonLabel}>{t('feedList.sortLabel')}</Text>
               </TouchableOpacity>
               {articleFilter !== 'read' && (
                 <TouchableOpacity
+                  ref={tourReadAllRef}
                   style={styles.headerButton}
                   onPress={handleMarkAllRead}
                 >
                   <Ionicons name="checkmark-done" size={20} color={theme.colors.text} />
-                  <Text style={styles.headerButtonLabel}>Read All</Text>
+                  <Text style={styles.headerButtonLabel}>{t('feedList.readAllLabel')}</Text>
                 </TouchableOpacity>
               )}
               {articleFilter !== 'unread' && (
@@ -1007,15 +1214,16 @@ export default function FeedListScreen({ navigation, route }) {
                   onPress={handleMarkAllUnread}
                 >
                   <Ionicons name="mail-unread-outline" size={20} color={theme.colors.text} />
-                  <Text style={styles.headerButtonLabel}>Unread All</Text>
+                  <Text style={styles.headerButtonLabel}>{t('feedList.unreadAllLabel')}</Text>
                 </TouchableOpacity>
               )}
               <TouchableOpacity
+                ref={tourAddRef}
                 style={styles.addButton}
                 onPress={() => navigation.navigate('AddFeed')}
               >
                 <Ionicons name="add" size={20} color={theme.colors.text} />
-                <Text style={styles.headerButtonLabel}>Add</Text>
+                <Text style={styles.headerButtonLabel}>{t('common.add')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1023,11 +1231,11 @@ export default function FeedListScreen({ navigation, route }) {
       </View>
 
       {/* Search Bar */}
-      <View style={styles.searchContainer}>
+      <View ref={tourSearchRef} collapsable={false} style={styles.searchContainer}>
         <Ionicons name="search" size={20} color={theme.colors.textSecondary} style={styles.searchIcon} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search articles..."
+          placeholder={t('feedList.searchPlaceholder')}
           placeholderTextColor={theme.colors.textSecondary}
           value={searchQuery}
           onChangeText={setSearchQuery}
@@ -1044,7 +1252,7 @@ export default function FeedListScreen({ navigation, route }) {
       {loading && !refreshing && (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text style={styles.loadingText}>Loading articles...</Text>
+          <Text style={styles.loadingText}>{t('feedList.loadingArticles')}</Text>
         </View>
       )}
 
@@ -1055,7 +1263,19 @@ export default function FeedListScreen({ navigation, route }) {
         keyExtractor={(item) => item.id}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
-        extraData={[articles, articleFilter, sortOrder, readingPosition?.afterArticleId]}
+        onScrollToIndexFailed={handleScrollToIndexFailed}
+        onScroll={(e) => { listOffsetRef.current = e.nativeEvent.contentOffset.y; }}
+        scrollEventThrottle={16}
+        onScrollBeginDrag={autoScroll.onScrollBeginDrag}
+        onTouchStart={autoScroll.onTouchStart}
+        onTouchMove={autoScroll.onTouchMove}
+        onTouchEnd={autoScroll.onTouchEnd}
+        onScrollEndDrag={autoScroll.onScrollEndDrag}
+        onMomentumScrollEnd={autoScroll.onMomentumScrollEnd}
+        onTouchCancel={autoScroll.onTouchCancel}
+        onContentSizeChange={(w, h) => { listContentHeightRef.current = h; }}
+        onLayout={(e) => { listViewportHeightRef.current = e.nativeEvent.layout.height; }}
+        extraData={listExtraData}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
@@ -1065,13 +1285,13 @@ export default function FeedListScreen({ navigation, route }) {
             <View style={styles.emptyState}>
               <Ionicons name="refresh-outline" size={60} color="#ccc" />
               <Text style={styles.emptyTitle}>
-                {articleFilter === 'unread' ? 'No Unread Articles' : 
-                 articleFilter === 'read' ? 'No Read Articles' : 'No Articles'}
+                {articleFilter === 'unread' ? t('feedList.emptyUnreadTitle') :
+                 articleFilter === 'read' ? t('feedList.emptyReadTitle') : t('feedList.emptyAllTitle')}
               </Text>
               <Text style={styles.emptyDescription}>
-                {articleFilter === 'unread' ? 'All articles have been read' :
-                 articleFilter === 'read' ? 'No articles have been read yet' :
-                 'Pull down to refresh your feeds'}
+                {articleFilter === 'unread' ? t('feedList.emptyUnreadDescription') :
+                 articleFilter === 'read' ? t('feedList.emptyReadDescription') :
+                 t('feedList.emptyAllDescription')}
               </Text>
             </View>
           )

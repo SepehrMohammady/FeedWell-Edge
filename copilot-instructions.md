@@ -76,9 +76,9 @@ Use this for complex changes spanning multiple components:
 
 ---
 
-## Current Project State (v2.0.2)
+## Current Project State (v2.1.0)
 
-- **App Version**: 2.0.2 (buildNumber: 1, stage: 'RC')
+- **App Version**: 2.1.0 (buildNumber: 2, stage: 'RC'), built on FeedWell 1.18.2
 - **Phase**: A (local event pipeline + lightweight continual learner)
 - **Next Phase**: B (µNAS architecture search + BNN quantization)
 - **Research Track**: Efficiency Cascade (target: <5MB, <50ms inference, <100ms update)

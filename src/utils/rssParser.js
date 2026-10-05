@@ -1,5 +1,50 @@
 import { parse } from 'react-native-rss-parser';
 
+// Feed dates arrive as raw strings in many formats. Hermes' Date parser is far
+// stricter than V8's, so a string that parses fine in a debugger can become
+// Invalid Date on-device — which used to poison list sorting. Normalize to ISO
+// at parse time, falling back to a hand-rolled RFC-822 reader.
+const RSS_MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+
+export function normalizePublishedDate(raw) {
+  if (!raw) return null;
+  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw.toISOString();
+  const s = String(raw).trim();
+  if (!s) return null;
+
+  const direct = new Date(s);
+  if (!Number.isNaN(direct.getTime())) return direct.toISOString();
+
+  // RFC-822 / RFC-1123: "Sat, 16 Aug 2026 19:05:00 +0300" (weekday and zone optional)
+  const m = s.match(/(d{1,2})s+([A-Za-z]{3})[a-z]*.?s+(d{4})(?:s+(d{1,2}):(d{2})(?::(d{2}))?)?s*([+-]d{4})?/);
+  if (m) {
+    const month = RSS_MONTHS[m[2].toLowerCase()];
+    if (month != null) {
+      let ms = Date.UTC(
+        parseInt(m[3], 10), month, parseInt(m[1], 10),
+        m[4] ? parseInt(m[4], 10) : 0,
+        m[5] ? parseInt(m[5], 10) : 0,
+        m[6] ? parseInt(m[6], 10) : 0
+      );
+      const zone = m[7];
+      if (zone) {
+        const sign = zone[0] === '-' ? -1 : 1;
+        ms -= sign * (parseInt(zone.slice(1, 3), 10) * 60 + parseInt(zone.slice(3, 5), 10)) * 60000;
+      }
+      if (!Number.isNaN(ms)) return new Date(ms).toISOString();
+    }
+  }
+
+  // "YYYY-MM-DD HH:MM(:SS)" — a space where ISO wants a T
+  const iso = s.match(/^(d{4})-(d{2})-(d{2})[ T](d{2}):(d{2})(?::(d{2}))?/);
+  if (iso) {
+    const ms = Date.UTC(+iso[1], +iso[2] - 1, +iso[3], +iso[4], +iso[5], iso[6] ? +iso[6] : 0);
+    if (!Number.isNaN(ms)) return new Date(ms).toISOString();
+  }
+
+  return null;
+}
+
 // Ad domains and patterns to block
 const AD_DOMAINS = [
   'googleads.g.doubleclick.net',
@@ -39,11 +84,88 @@ const AD_PATTERNS = [
   /googleadservices/gi
 ];
 
+// v1.8.1: Normalize an extracted image URL.
+// - Decodes HTML entities (&amp; in query strings, etc.)
+// - Upgrades protocol-relative URLs (//host/x -> https://host/x)
+// - Returns null for anything that is not an absolute http(s) URL
+export function normalizeImageUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  let normalized = decodeHtmlEntities(url.trim());
+  if (normalized.startsWith('//')) {
+    normalized = 'https:' + normalized;
+  }
+  if (!/^https?:\/\//i.test(normalized)) return null;
+  return normalized;
+}
+
+// v1.8.1: Find the first usable <img> URL inside an HTML fragment.
+// Handles: entity-encoded markup (&lt;img ...&gt;), lazy-load attributes
+// (data-src, data-lazy-src, data-original), srcset, and skips tiny
+// tracking pixels (width/height <= 2 or 1x1/pixel/spacer filenames).
+// Pure string parsing — no network access.
+export function extractImageFromHtml(html) {
+  if (!html) return null;
+
+  let text = html;
+  // If there is no literal <img> but there IS an entity-encoded one, decode first
+  if (!/<img[\s/>]/i.test(text) && /&lt;\s*img/i.test(text)) {
+    text = decodeHtmlEntities(text);
+  }
+
+  const imgTagRegex = /<img\b[^>]*>/gi;
+  let tagMatch;
+  while ((tagMatch = imgTagRegex.exec(text)) !== null) {
+    const tag = tagMatch[0];
+
+    // Skip tiny tracking pixels when detectable from attributes
+    const widthMatch = tag.match(/\bwidth=['"]?(\d+)/i);
+    const heightMatch = tag.match(/\bheight=['"]?(\d+)/i);
+    if ((widthMatch && parseInt(widthMatch[1], 10) <= 2) ||
+        (heightMatch && parseInt(heightMatch[1], 10) <= 2)) {
+      continue;
+    }
+
+    // Try src first, then common lazy-loading attributes
+    const srcAttrPatterns = [
+      /\bsrc=['"]([^'"]+)['"]/i,
+      /\bdata-src=['"]([^'"]+)['"]/i,
+      /\bdata-lazy-src=['"]([^'"]+)['"]/i,
+      /\bdata-original=['"]([^'"]+)['"]/i,
+    ];
+    let candidate = null;
+    for (const pattern of srcAttrPatterns) {
+      const attrMatch = tag.match(pattern);
+      if (attrMatch && attrMatch[1]) {
+        const normalized = normalizeImageUrl(attrMatch[1]);
+        if (normalized) {
+          candidate = normalized;
+          break;
+        }
+      }
+    }
+
+    // Fall back to the first URL of srcset
+    if (!candidate) {
+      const srcsetMatch = tag.match(/\bsrcset=['"]([^'"]+)['"]/i);
+      if (srcsetMatch && srcsetMatch[1]) {
+        const firstEntry = srcsetMatch[1].split(',')[0].trim().split(/\s+/)[0];
+        candidate = normalizeImageUrl(firstEntry);
+      }
+    }
+
+    if (candidate && !/(^|\/)(1x1|pixel|spacer|blank|transparent)\.(gif|png|jpg|jpeg|webp)/i.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 // CRITICAL FIX v1.0.28 + v1.1.6: Extract media:content and media:thumbnail URLs from raw XML
 // The react-native-rss-parser library does not parse these media namespace elements,
 // so many feeds' article images are missed. This function extracts them directly.
 // Returns { byIndex: [...], byUrl: {url: imageUrl} } for robust matching.
-function extractMediaUrlsFromXml(rawXml) {
+export function extractMediaUrlsFromXml(rawXml) {
   const byIndex = [];
   const byUrl = {};
   
@@ -140,18 +262,43 @@ function extractMediaUrlsFromXml(rawXml) {
       }
     }
 
-    // 7. Try extracting <img> from description CDATA
+    // 7. Try enclosure without a type attribute but with an image file extension
     if (!imageUrl) {
-      const descMatch = itemXml.match(/<description[^>]*>\s*(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?\s*<\/description>/i);
-      if (descMatch) {
-        const descHtml = descMatch[1];
-        const imgMatch = descHtml.match(/<img[^>]+src=['"]([^'"]+)['"][^>]*>/i);
-        if (imgMatch && imgMatch[1] && imgMatch[1].startsWith('http')) {
-          imageUrl = imgMatch[1];
+      const enclosureExt = itemXml.match(/<enclosure[^>]+url=['"]([^'"]+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^'"]*)?)['"][^>]*\/?>/i);
+      if (enclosureExt) {
+        imageUrl = enclosureExt[1];
+      }
+    }
+
+    // 8. Try itunes:image (podcast feeds)
+    if (!imageUrl) {
+      const itunesImage = itemXml.match(/<itunes:image[^>]+href=['"]([^'"]+)['"][^>]*\/?>/i);
+      if (itunesImage) {
+        imageUrl = itunesImage[1];
+      }
+    }
+
+    // 9. Try the first <img> in content:encoded / content / description / summary
+    // (handles CDATA, entity-encoded markup, lazy-load attrs, srcset)
+    if (!imageUrl) {
+      const htmlFieldNames = ['content:encoded', 'content', 'description', 'summary'];
+      for (const fieldName of htmlFieldNames) {
+        const fieldRegex = new RegExp(
+          '<' + fieldName + '(?=[\\s>])[^>]*>\\s*(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?\\s*</' + fieldName + '>',
+          'i'
+        );
+        const fieldMatch = itemXml.match(fieldRegex);
+        if (fieldMatch && fieldMatch[1]) {
+          imageUrl = extractImageFromHtml(fieldMatch[1]);
+          if (imageUrl) break;
         }
       }
     }
-    
+
+    // Normalize whatever we found (entity-decode, //host -> https://host,
+    // drop non-absolute URLs so later fallbacks can still run)
+    imageUrl = normalizeImageUrl(imageUrl);
+
     byIndex.push(imageUrl);
     
     // Store in URL map for robust matching
@@ -237,38 +384,153 @@ async function fetchOgImage(articleUrl, timeoutMs = 8000) {
   }
 }
 
-// Fetch og:image for all articles that are missing images, in parallel
-// v1.1.8: Limit to first 5 articles to avoid slow feed loading
+// v1.8.1: og:image fetch budgeting + persistent per-URL attempt cache.
+// Previously only the FIRST 5 image-less articles (in feed order) were ever
+// fetched, and there was no memory of attempts — articles past the cap were
+// never retried on later refreshes (TechCrunch bug: feed carries zero image
+// markup, so every item depends on this fallback).
+const OG_FETCH_LIMIT_PER_PARSE = 10;          // max article-page fetches per feed parse
+const OG_FETCH_TIMEOUT_MS = 8000;             // bounded page-fetch timeout
+const OG_MAX_ATTEMPTS = 3;                    // give up on a URL after this many failed fetches
+const OG_RETRY_COOLDOWN_MS = 30 * 60 * 1000;  // don't re-try the same URL within 30 min
+const OG_CACHE_STORAGE_KEY = 'ogImageAttemptCache';
+const OG_CACHE_MAX_ENTRIES = 300;
+
+// Map: articleUrl -> { t: lastAttemptMs, n: failedAttempts, img: foundImageUrl|undefined }
+let ogAttemptCache = null;
+let ogCacheLoadPromise = null;
+
+function getAsyncStorageSafe() {
+  try {
+    const mod = require('@react-native-async-storage/async-storage');
+    return mod.default || mod;
+  } catch (e) {
+    return null; // cache degrades to in-memory only
+  }
+}
+
+async function loadOgAttemptCache() {
+  if (ogAttemptCache) return ogAttemptCache;
+  if (!ogCacheLoadPromise) {
+    ogCacheLoadPromise = (async () => {
+      const map = new Map();
+      try {
+        const AsyncStorage = getAsyncStorageSafe();
+        if (AsyncStorage) {
+          const raw = await AsyncStorage.getItem(OG_CACHE_STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+              Object.keys(parsed).forEach(url => {
+                const entry = parsed[url];
+                if (entry && typeof entry.t === 'number') map.set(url, entry);
+              });
+            }
+          }
+        }
+      } catch (e) {
+        // Cache is best-effort; start empty on any failure
+      }
+      ogAttemptCache = map;
+      return map;
+    })();
+  }
+  return ogCacheLoadPromise;
+}
+
+async function saveOgAttemptCache(cache) {
+  try {
+    const AsyncStorage = getAsyncStorageSafe();
+    if (!AsyncStorage) return;
+    let entries = Array.from(cache.entries());
+    // Prune to the most recently touched entries to bound storage size
+    if (entries.length > OG_CACHE_MAX_ENTRIES) {
+      entries.sort((a, b) => b[1].t - a[1].t);
+      entries = entries.slice(0, OG_CACHE_MAX_ENTRIES);
+      ogAttemptCache = new Map(entries);
+    }
+    const obj = {};
+    entries.forEach(([url, entry]) => { obj[url] = entry; });
+    await AsyncStorage.setItem(OG_CACHE_STORAGE_KEY, JSON.stringify(obj));
+  } catch (e) {
+    // Best-effort persistence; in-memory cache still works this session
+  }
+}
+
+// Fetch og:image for articles that are missing images, in parallel.
+// v1.8.1 strategy:
+//   - Cached successes are applied instantly with NO network call.
+//   - Up to OG_FETCH_LIMIT_PER_PARSE page fetches per parse, prioritizing
+//     never-attempted articles (newest published first), then previously
+//     failed ones oldest-attempt first — so articles beyond the cap get
+//     picked up on SUBSEQUENT refreshes instead of never.
+//   - Failed URLs respect a cooldown and a max-attempt limit.
 async function fetchMissingArticleImages(articles) {
   const articlesNeedingImages = articles
     .map((article, index) => ({ article, index }))
     .filter(({ article }) => !article.imageUrl && article.url);
-  
+
   if (articlesNeedingImages.length === 0) return articles;
-  
-  // Limit to first 5 to keep feed loading fast (was causing major slowdown)
-  const batch = articlesNeedingImages.slice(0, 5);
-  console.log(`[og:image] Fetching preview images for ${batch.length}/${articlesNeedingImages.length} articles without RSS images...`);
-  
-  const results = await Promise.allSettled(
-    batch.map(({ article }) => fetchOgImage(article.url, 5000))
-  );
-  
+
+  const cache = await loadOgAttemptCache();
+  const now = Date.now();
   const updatedArticles = [...articles];
+
+  // 1. Apply cached successes without any network access
+  let cachedHits = 0;
+  const candidates = [];
+  for (const { article, index } of articlesNeedingImages) {
+    const entry = cache.get(article.url);
+    if (entry && entry.img) {
+      updatedArticles[index] = { ...updatedArticles[index], imageUrl: entry.img };
+      cachedHits++;
+      continue;
+    }
+    if (entry && entry.n >= OG_MAX_ATTEMPTS) continue;            // repeatedly failed — give up
+    if (entry && now - entry.t < OG_RETRY_COOLDOWN_MS) continue;  // tried too recently
+    candidates.push({ article, index, entry });
+  }
+  if (cachedHits > 0) {
+    console.log(`[og:image] Applied ${cachedHits} cached preview images (no network)`);
+  }
+
+  // 2. Prioritize: never-attempted first (newest published first),
+  //    then previously attempted ordered by oldest attempt first
+  candidates.sort((a, b) => {
+    const aTried = a.entry ? 1 : 0;
+    const bTried = b.entry ? 1 : 0;
+    if (aTried !== bTried) return aTried - bTried;
+    if (!aTried) {
+      return new Date(b.article.publishedDate || 0) - new Date(a.article.publishedDate || 0);
+    }
+    return a.entry.t - b.entry.t;
+  });
+
+  const batch = candidates.slice(0, OG_FETCH_LIMIT_PER_PARSE);
+  if (batch.length === 0) return updatedArticles;
+
+  console.log(`[og:image] Fetching preview images for ${batch.length}/${articlesNeedingImages.length} articles without RSS images...`);
+
+  const results = await Promise.allSettled(
+    batch.map(({ article }) => fetchOgImage(article.url, OG_FETCH_TIMEOUT_MS))
+  );
+
   let foundCount = 0;
-  
   results.forEach((result, i) => {
+    const { article, index, entry } = batch[i];
+    const prevFailures = entry && typeof entry.n === 'number' ? entry.n : 0;
     if (result.status === 'fulfilled' && result.value) {
-      const articleIndex = batch[i].index;
-      updatedArticles[articleIndex] = {
-        ...updatedArticles[articleIndex],
-        imageUrl: result.value,
-      };
+      updatedArticles[index] = { ...updatedArticles[index], imageUrl: result.value };
+      cache.set(article.url, { t: now, n: prevFailures, img: result.value });
       foundCount++;
+    } else {
+      cache.set(article.url, { t: now, n: prevFailures + 1 });
     }
   });
-  
+
   console.log(`[og:image] Found ${foundCount}/${batch.length} preview images from article pages`);
+
+  await saveOgAttemptCache(cache);
   return updatedArticles;
 }
 
@@ -672,7 +934,8 @@ export async function parseRSSFeed(url, maxArticleAge = 0) {
             const cleanContent = cleanHtmlContent(item.content || '');
             
             // Try parser's extractImageUrl first, fall back to raw XML media URL
-            const parsedImageUrl = extractImageUrl(item);
+            const rawParsedImageUrl = extractImageUrl(item);
+            const parsedImageUrl = normalizeImageUrl(rawParsedImageUrl) || rawParsedImageUrl;
             const articleUrl = item.links?.[0]?.url || item.url || '';
             const mediaImageUrl = media.byUrl[articleUrl] || media.byUrl[item.id] || media.byIndex[index] || null;
             
@@ -683,7 +946,7 @@ export async function parseRSSFeed(url, maxArticleAge = 0) {
               content: extractCleanText(cleanContent),
               htmlContent: cleanDescription || cleanContent,
               url: item.links?.[0]?.url || item.url || '',
-              publishedDate: item.published || item.pubDate || new Date().toISOString(),
+              publishedDate: normalizePublishedDate(item.published || item.pubDate) || new Date().toISOString(),
               authors: item.authors || [],
               categories: item.categories || [],
               feedUrl: url,
@@ -725,7 +988,7 @@ export async function parseRSSFeed(url, maxArticleAge = 0) {
         const response = await fetch(fetchUrl, {
           headers: {
             'Accept': 'application/rss+xml, application/xml, text/xml, */*',
-            'User-Agent': 'FeedWell/1.1.7 RSS Reader',
+            'User-Agent': FEED_USER_AGENT,
           },
         });
         
@@ -761,7 +1024,8 @@ export async function parseRSSFeed(url, maxArticleAge = 0) {
       const cleanContent = cleanHtmlContent(item.content || '');
       
       // Try parser's extractImageUrl first, fall back to raw XML media URL
-      const parsedImageUrl = extractImageUrl(item);
+      const rawParsedImageUrl = extractImageUrl(item);
+      const parsedImageUrl = normalizeImageUrl(rawParsedImageUrl) || rawParsedImageUrl;
       const articleUrl = item.links?.[0]?.url || item.url || '';
       const mediaImageUrl = media.byUrl[articleUrl] || media.byUrl[item.id] || media.byIndex[index] || null;
       
@@ -772,7 +1036,7 @@ export async function parseRSSFeed(url, maxArticleAge = 0) {
         content: extractCleanText(cleanContent),
         htmlContent: cleanDescription || cleanContent,
         url: item.links?.[0]?.url || item.url || '',
-        publishedDate: item.published || item.pubDate || new Date().toISOString(),
+        publishedDate: normalizePublishedDate(item.published || item.pubDate) || new Date().toISOString(),
         authors: item.authors || [],
         categories: item.categories || [],
         feedUrl: url,
@@ -804,7 +1068,7 @@ export async function parseRSSFeed(url, maxArticleAge = 0) {
 }
 
 // Extract image URL from item
-function extractImageUrl(item) {
+export function extractImageUrl(item) {
   console.log('Extracting image for article:', item.title);
   
   // Try different fields where images might be stored
@@ -852,25 +1116,15 @@ function extractImageUrl(item) {
   const content = item.content || item.description || '';
   
   if (content) {
-    // Look for img tags with various patterns
-    const imgPatterns = [
-      /<img[^>]+src=['"]([^'"]+)['"][^>]*>/i,
-      /<img[^>]+data-src=['"]([^'"]+)['"][^>]*>/i, // lazy loading
-      /<img[^>]+data-original=['"]([^'"]+)['"][^>]*>/i, // lazy loading
-      /<img[^>]+data-lazy-src=['"]([^'"]+)['"][^>]*>/i, // lazy loading
-      /<figure[^>]*>.*?<img[^>]+src=['"]([^'"]+)['"][^>]*>.*?<\/figure>/is,
-    ];
-    
-    for (const pattern of imgPatterns) {
-      const match = content.match(pattern);
-      if (match && match[1]) {
-        const url = match[1];
-        console.log('Found img tag:', url);
-        if (!isAdOrTrackingImage(url)) {
-          return url;
-        } else {
-          console.log('Rejected ad/tracking image:', url);
-        }
+    // v1.8.1: shared <img> extraction — handles src, data-src, data-lazy-src,
+    // data-original, srcset, entity-encoded markup, and skips tracking pixels
+    const htmlImg = extractImageFromHtml(content);
+    if (htmlImg) {
+      if (!isAdOrTrackingImage(htmlImg)) {
+        console.log('Found img tag:', htmlImg);
+        return htmlImg;
+      } else {
+        console.log('Rejected ad/tracking image:', htmlImg);
       }
     }
     
@@ -973,6 +1227,84 @@ function isAdOrTrackingImage(url) {
 }
 
 // Validate RSS URL
+// --- Feed auto-discovery -----------------------------------------------------
+// Given a website address (e.g. "https://www.bbc.com"), find its RSS/Atom feed
+// the way a browser does: read the page's <link rel="alternate"> tags, then fall
+// back to the conventional feed paths. Returns a feed URL, or null if none works.
+
+const FEED_USER_AGENT = 'FeedWell RSS Reader';
+const COMMON_FEED_PATHS = ['/feed', '/rss', '/rss.xml', '/feed.xml', '/atom.xml', '/index.xml'];
+const MAX_DISCOVERY_PROBES = 8;
+
+function looksLikeFeedText(text) {
+  if (!text) return false;
+  const head = text.slice(0, 2000).toLowerCase();
+  return head.includes('<rss') || head.includes('<feed') || head.includes('<rdf:rdf');
+}
+
+async function fetchTextWithTimeout(url, accept, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: { 'Accept': accept, 'User-Agent': FEED_USER_AGENT },
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    return await response.text();
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function discoverFeedUrl(siteUrl) {
+  const base = String(siteUrl || '').trim();
+  if (!base) return null;
+
+  // 1. Fetch the page. If the URL already IS a feed, we're done.
+  const pageHtml = await fetchTextWithTimeout(
+    base,
+    'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+  );
+  if (looksLikeFeedText(pageHtml)) return base;
+
+  const candidates = [];
+
+  // 2. <link rel="alternate" type="application/rss+xml" href="..."> in the HTML.
+  if (pageHtml) {
+    const linkTags = pageHtml.match(/<link[^>]*>/gi) || [];
+    for (const tag of linkTags) {
+      if (!/rels*=s*["']?[^"'>]*alternate/i.test(tag)) continue;
+      if (!/types*=s*["']?application/(rss|atom)+xml/i.test(tag)) continue;
+      const href = tag.match(/hrefs*=s*["']([^"']+)["']/i);
+      if (href && href[1]) candidates.push(href[1]);
+    }
+  }
+
+  // 3. Conventional paths as a fallback.
+  let origin = base;
+  try { origin = new URL(base).origin; } catch (e) { /* keep base */ }
+  for (const path of COMMON_FEED_PATHS) candidates.push(origin + path);
+
+  // 4. Probe candidates in order; first one that parses as a feed wins.
+  const seen = new Set();
+  let probes = 0;
+  for (const candidate of candidates) {
+    if (probes >= MAX_DISCOVERY_PROBES) break;
+    let absolute;
+    try { absolute = new URL(candidate, base).toString(); } catch (e) { continue; }
+    if (seen.has(absolute)) continue;
+    seen.add(absolute);
+    probes++;
+    const text = await fetchTextWithTimeout(absolute, 'application/rss+xml, application/xml, text/xml, */*');
+    if (looksLikeFeedText(text)) return absolute;
+  }
+
+  return null;
+}
+
 export function isValidRSSUrl(url) {
   try {
     const urlObj = new URL(url);

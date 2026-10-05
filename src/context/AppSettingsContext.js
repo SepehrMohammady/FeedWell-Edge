@@ -1,5 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { APP_VERSION } from '../config/version';
+import { normalizeAutoScrollSpeed } from '../hooks/useAutoScroll';
+import { DEFAULT_READING_FONT, getReadingFont } from '../config/readingFonts';
 
 const AppSettingsContext = createContext();
 
@@ -20,6 +23,32 @@ export function AppSettingsProvider({ children }) {
   const [readingReminder, setReadingReminder] = useState(true);
   const [onDeviceLearningEnabled, setOnDeviceLearningEnabled] = useState(true);
   const [onDeviceLearningRetentionDays, setOnDeviceLearningRetentionDays] = useState(30);
+  // Local-feeds region for Popular Categories ('global' = English). When the user
+  // hasn't explicitly chosen one, screens derive it from the app language.
+  const [feedRegion, setFeedRegion] = useState('global');
+  const [feedRegionUserSet, setFeedRegionUserSet] = useState(false);
+  // Whether the user explicitly picked an article-translation language (so a
+  // later app-language change only *suggests*, never silently overrides it).
+  const [translationTargetUserSet, setTranslationTargetUserSet] = useState(false);
+  // Last app version for which the "What's New" popup was shown.
+  const [lastSeenVersion, setLastSeenVersion] = useState(null);
+  // Saved (Read Later) list sort order — persisted so it survives navigation.
+  const [readLaterSortOrder, setReadLaterSortOrder] = useState('newest'); // 'newest' | 'oldest'
+  // Font used for article body text in the reader (Settings > Reading Font).
+  const [readingFont, setReadingFont] = useState(DEFAULT_READING_FONT);
+  // Feed-list auto-scroll: off by default; starts after `delay` seconds of
+  // inactivity and scrolls at the chosen speed.
+  const [autoScrollEnabled, setAutoScrollEnabled] = useState(false);
+  const [autoScrollDelay, setAutoScrollDelay] = useState(5); // seconds: 3|5|10|15
+  // Percent of the base speed (25–250, step 25). Legacy 'slow'|'normal'|'fast'
+  // values from pre-1.12 installs are migrated on load.
+  const [autoScrollSpeed, setAutoScrollSpeed] = useState(100);
+  // Sub-option of auto-scroll: hold the screen on while reading the feed list
+  // or an article, so it never dims mid-scroll.
+  const [keepAwakeEnabled, setKeepAwakeEnabled] = useState(false);
+  // Translate articles into the default translation language as they open.
+  // Off by default: in online mode it sends each opened article to Google.
+  const [autoTranslate, setAutoTranslate] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -44,7 +73,18 @@ export function AppSettingsProvider({ children }) {
       const savedReadingReminder = await AsyncStorage.getItem('readingReminder');
       const savedOnDeviceLearningEnabled = await AsyncStorage.getItem('onDeviceLearningEnabled');
       const savedOnDeviceLearningRetentionDays = await AsyncStorage.getItem('onDeviceLearningRetentionDays');
-      
+      const savedFeedRegion = await AsyncStorage.getItem('feedRegion');
+      const savedFeedRegionUserSet = await AsyncStorage.getItem('feedRegionUserSet');
+      const savedTranslationTargetUserSet = await AsyncStorage.getItem('translationTargetUserSet');
+      const savedLastSeenVersion = await AsyncStorage.getItem('lastSeenVersion');
+      const savedReadLaterSortOrder = await AsyncStorage.getItem('readLaterSortOrder');
+      const savedReadingFont = await AsyncStorage.getItem('readingFont');
+      const savedAutoScrollEnabled = await AsyncStorage.getItem('autoScrollEnabled');
+      const savedAutoScrollDelay = await AsyncStorage.getItem('autoScrollDelay');
+      const savedAutoScrollSpeed = await AsyncStorage.getItem('autoScrollSpeed');
+      const savedKeepAwakeEnabled = await AsyncStorage.getItem('keepAwakeEnabled');
+      const savedAutoTranslate = await AsyncStorage.getItem('autoTranslate');
+
       if (savedShowImages !== null) {
         setShowImages(JSON.parse(savedShowImages));
       }
@@ -107,6 +147,51 @@ export function AppSettingsProvider({ children }) {
 
       if (savedOnDeviceLearningRetentionDays !== null) {
         setOnDeviceLearningRetentionDays(JSON.parse(savedOnDeviceLearningRetentionDays));
+      }
+
+      if (savedFeedRegion !== null) {
+        setFeedRegion(JSON.parse(savedFeedRegion));
+      }
+
+      if (savedFeedRegionUserSet !== null) {
+        setFeedRegionUserSet(JSON.parse(savedFeedRegionUserSet));
+      }
+
+      if (savedTranslationTargetUserSet !== null) {
+        setTranslationTargetUserSet(JSON.parse(savedTranslationTargetUserSet));
+      }
+
+      if (savedLastSeenVersion !== null) {
+        setLastSeenVersion(JSON.parse(savedLastSeenVersion));
+      }
+
+      if (savedReadLaterSortOrder !== null) {
+        setReadLaterSortOrder(JSON.parse(savedReadLaterSortOrder));
+      }
+
+      if (savedReadingFont !== null) {
+        // getReadingFont falls back to the default for an unknown key.
+        setReadingFont(getReadingFont(JSON.parse(savedReadingFont)).key);
+      }
+
+      if (savedAutoScrollEnabled !== null) {
+        setAutoScrollEnabled(JSON.parse(savedAutoScrollEnabled));
+      }
+
+      if (savedAutoScrollDelay !== null) {
+        setAutoScrollDelay(JSON.parse(savedAutoScrollDelay));
+      }
+
+      if (savedKeepAwakeEnabled !== null) {
+        setKeepAwakeEnabled(JSON.parse(savedKeepAwakeEnabled));
+      }
+
+      if (savedAutoTranslate !== null) {
+        setAutoTranslate(JSON.parse(savedAutoTranslate));
+      }
+
+      if (savedAutoScrollSpeed !== null) {
+        setAutoScrollSpeed(normalizeAutoScrollSpeed(JSON.parse(savedAutoScrollSpeed)));
       }
     } catch (error) {
       console.error('Error loading app settings:', error);
@@ -214,10 +299,109 @@ export function AppSettingsProvider({ children }) {
     }
   };
 
+  // Explicit user choice of feed region (marks it user-set so a later app-language
+  // change won't auto-follow). Pass userSet=false to only update the value.
+  const updateFeedRegion = async (value, userSet = true) => {
+    try {
+      setFeedRegion(value);
+      await AsyncStorage.setItem('feedRegion', JSON.stringify(value));
+      if (userSet) {
+        setFeedRegionUserSet(true);
+        await AsyncStorage.setItem('feedRegionUserSet', JSON.stringify(true));
+      }
+    } catch (error) {
+      console.error('Error saving feedRegion setting:', error);
+    }
+  };
+
+  const markTranslationTargetUserSet = async (value = true) => {
+    try {
+      setTranslationTargetUserSet(value);
+      await AsyncStorage.setItem('translationTargetUserSet', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving translationTargetUserSet flag:', error);
+    }
+  };
+
+  const updateReadLaterSortOrder = async (value) => {
+    try {
+      setReadLaterSortOrder(value);
+      await AsyncStorage.setItem('readLaterSortOrder', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving readLaterSortOrder setting:', error);
+    }
+  };
+
+  const updateReadingFont = async (value) => {
+    try {
+      setReadingFont(value);
+      await AsyncStorage.setItem('readingFont', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving readingFont setting:', error);
+    }
+  };
+
+  const updateAutoScrollEnabled = async (value) => {
+    try {
+      setAutoScrollEnabled(value);
+      await AsyncStorage.setItem('autoScrollEnabled', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving autoScrollEnabled setting:', error);
+    }
+  };
+
+  const updateAutoScrollDelay = async (value) => {
+    try {
+      setAutoScrollDelay(value);
+      await AsyncStorage.setItem('autoScrollDelay', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving autoScrollDelay setting:', error);
+    }
+  };
+
+  const updateAutoScrollSpeed = async (value) => {
+    try {
+      setAutoScrollSpeed(value);
+      await AsyncStorage.setItem('autoScrollSpeed', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving autoScrollSpeed setting:', error);
+    }
+  };
+
+  const updateKeepAwakeEnabled = async (value) => {
+    try {
+      setKeepAwakeEnabled(value);
+      await AsyncStorage.setItem('keepAwakeEnabled', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving keepAwakeEnabled setting:', error);
+    }
+  };
+
+  const updateAutoTranslate = async (value) => {
+    try {
+      setAutoTranslate(value);
+      await AsyncStorage.setItem('autoTranslate', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving autoTranslate setting:', error);
+    }
+  };
+
+  const updateLastSeenVersion = async (value) => {
+    try {
+      setLastSeenVersion(value);
+      await AsyncStorage.setItem('lastSeenVersion', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving lastSeenVersion:', error);
+    }
+  };
+
   const completeOnboarding = async () => {
     try {
       setHasSeenOnboarding(true);
       await AsyncStorage.setItem('hasSeenOnboarding', JSON.stringify(true));
+      // Stamp the current version so a fresh install never sees the What's New popup.
+      setLastSeenVersion(APP_VERSION.version);
+      await AsyncStorage.setItem('lastSeenVersion', JSON.stringify(APP_VERSION.version));
     } catch (error) {
       console.error('Error saving onboarding status:', error);
     }
@@ -285,7 +469,28 @@ export function AppSettingsProvider({ children }) {
     readingReminder,
     onDeviceLearningEnabled,
     onDeviceLearningRetentionDays,
+    feedRegion,
+    feedRegionUserSet,
+    translationTargetUserSet,
+    lastSeenVersion,
+    readLaterSortOrder,
+    readingFont,
+    autoScrollEnabled,
+    autoScrollDelay,
+    autoScrollSpeed,
+    keepAwakeEnabled,
+    autoTranslate,
     isLoading,
+    updateFeedRegion,
+    markTranslationTargetUserSet,
+    updateLastSeenVersion,
+    updateReadLaterSortOrder,
+    updateReadingFont,
+    updateAutoScrollEnabled,
+    updateAutoScrollDelay,
+    updateAutoScrollSpeed,
+    updateKeepAwakeEnabled,
+    updateAutoTranslate,
     updateShowImages,
     updateAutoRefresh,
     updateArticleFilter,

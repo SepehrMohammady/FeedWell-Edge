@@ -1,26 +1,62 @@
 import 'react-native-gesture-handler';
 import React, { useState, useEffect, useCallback } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { AppState, Linking } from 'react-native';
-import { NavigationContainer, createNavigationContainerRef, CommonActions } from '@react-navigation/native';
+import { AppState, Linking, I18nManager } from 'react-native';
+import { NavigationContainer, createNavigationContainerRef, CommonActions, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { FeedProvider } from './src/context/FeedContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
+import { LanguageProvider, useTranslation } from './src/context/LanguageContext';
 import { AppSettingsProvider, useAppSettings } from './src/context/AppSettingsContext';
 import { ReadLaterProvider } from './src/context/ReadLaterContext';
 import { NotesProvider } from './src/context/NotesContext';
 import { AmbientSoundProvider } from './src/context/AmbientSoundContext';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import AppNavigator from './src/navigation/AppNavigator';
-import OnboardingTutorial from './src/components/OnboardingTutorial';
+import AppTour from './src/components/AppTour';
+import { TourProvider, useTour } from './src/context/TourContext';
+import WhatsNewModal from './src/components/WhatsNewModal';
 import KinetosisOverlay from './src/components/KinetosisOverlay';
+import * as Font from 'expo-font';
+import { BUNDLED_FONT_ASSETS } from './src/config/readingFonts';
+import { APP_VERSION } from './src/config/version';
 import { setupNotificationChannel, scheduleReminderNotification, cancelReminderNotification } from './src/utils/notificationService';
+
+// Keep the native layer LTR so our per-component RTL (for Farsi) is the only
+// RTL source — prevents a Farsi/Arabic *system* locale from auto-mirroring the
+// native shell and double-flipping our manual row-reverse layouts.
+try { I18nManager.allowRTL(false); } catch (e) { /* no-op */ }
 
 const NAV_STATE_KEY = 'feedwell_nav_state';
 const navigationRef = createNavigationContainerRef();
 let pendingDeepLinkUrl = null;
+
+// Cleans the saved navigation state before restoring it. Up to 1.18.1, Back
+// from an article stacked a second list on top of it (List > Article > List),
+// and this saved state carried that across restarts, so Back on the list kept
+// reopening an old article. Only the open tab keeps its stack, trimmed to start
+// at its last list screen; the other tabs start fresh at their list. Their
+// leftover nested-navigation params are dropped too, or the first visit to the
+// tab would replay them and reopen the article they pointed at.
+const TAB_LIST_SCREENS = { Feeds: 'FeedList', ReadLater: 'ReadLaterList' };
+function cleanRestoredNavState(state) {
+  if (!Array.isArray(state?.routes)) return state;
+  const focusedTab = state.routes[state.index ?? 0]?.name;
+  return {
+    ...state,
+    routes: state.routes.map((tab) => {
+      const listScreen = TAB_LIST_SCREENS[tab.name];
+      if (!listScreen) return tab;
+      const { params: _staleParams, state: stack, ...rest } = tab;
+      if (tab.name !== focusedTab || !Array.isArray(stack?.routes)) return rest;
+      const lastList = stack.routes.map((route) => route.name).lastIndexOf(listScreen);
+      const routes = lastList > 0 ? stack.routes.slice(lastList) : stack.routes;
+      return { ...rest, state: { ...stack, routes, index: routes.length - 1 } };
+    }),
+  };
+}
 
 function handleDeepLink(url) {
   if (!url) return;
@@ -100,9 +136,11 @@ function handleDeepLink(url) {
 }
 
 function AppContent() {
-  const { hasSeenOnboarding, completeOnboarding, isLoading, allowRotation, readingReminder } = useAppSettings();
+  const { hasSeenOnboarding, completeOnboarding, isLoading, allowRotation, readingReminder, lastSeenVersion, updateLastSeenVersion } = useAppSettings();
   const { theme, isDarkMode } = useTheme();
-  const [showOnboarding, setShowOnboarding] = useState(false);
+  const { langLoading, language } = useTranslation();
+  const tour = useTour();
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
   const [navStateReady, setNavStateReady] = useState(false);
   const [initialNavState, setInitialNavState] = useState(undefined);
 
@@ -112,7 +150,7 @@ function AppContent() {
       try {
         const saved = await AsyncStorage.getItem(NAV_STATE_KEY);
         if (saved) {
-          setInitialNavState(JSON.parse(saved));
+          setInitialNavState(cleanRestoredNavState(JSON.parse(saved)));
         }
       } catch (e) {
         // Ignore restore errors
@@ -154,7 +192,16 @@ function AppContent() {
     });
 
     return () => subscription.remove();
-  }, [readingReminder]);
+  }, [readingReminder, language]);
+
+  // Load the bundled reading fonts. Deliberately not gated behind a splash
+  // screen: a failure here must never block the app, it just means the reader
+  // falls back to the system font.
+  useEffect(() => {
+    Font.loadAsync(BUNDLED_FONT_ASSETS).catch((e) => {
+      console.warn('Reading fonts failed to load:', e?.message);
+    });
+  }, []);
 
   // Handle deep links from widget
   useEffect(() => {
@@ -165,19 +212,34 @@ function AppContent() {
     return () => linkSub.remove();
   }, []);
 
+  // First launch: walk the new user through the app. Finishing or skipping the
+  // tour marks onboarding done (and stamps the version, so no What's New popup).
   useEffect(() => {
-    if (!isLoading && !hasSeenOnboarding) {
-      setShowOnboarding(true);
+    if (!isLoading && !hasSeenOnboarding && tour && !tour.active) {
+      tour.startTour(completeOnboarding);
     }
-  }, [isLoading, hasSeenOnboarding]);
+  }, [isLoading, hasSeenOnboarding]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleOnboardingComplete = () => {
-    setShowOnboarding(false);
-    completeOnboarding();
+  // Show the "What's New" popup once after updating to a new version. Never on a
+  // fresh install (those see onboarding, which stamps lastSeenVersion on finish).
+  useEffect(() => {
+    if (!isLoading && hasSeenOnboarding && lastSeenVersion !== APP_VERSION.version) {
+      setShowWhatsNew(true);
+    }
+  }, [isLoading, hasSeenOnboarding, lastSeenVersion]);
+
+  const handleWhatsNewClose = () => {
+    setShowWhatsNew(false);
+    updateLastSeenVersion(APP_VERSION.version);
   };
 
-  if (isLoading || !navStateReady) {
-    return null; // Or a loading screen
+  const handleWhatsNewTour = () => {
+    handleWhatsNewClose();
+    tour?.startTour();
+  };
+
+  if (isLoading || langLoading || !navStateReady) {
+    return null; // Wait for settings + language so the first paint is correct (no flash)
   }
 
   return (
@@ -186,6 +248,10 @@ function AppContent() {
         ref={navigationRef}
         initialState={initialNavState}
         onStateChange={onNavStateChange}
+        theme={isDarkMode
+          ? { ...DarkTheme, colors: { ...DarkTheme.colors, background: theme.colors.background } }
+          : { ...DefaultTheme, colors: { ...DefaultTheme.colors, background: theme.colors.background } }
+        }
         onReady={() => {
           if (pendingDeepLinkUrl) {
             handleDeepLink(pendingDeepLinkUrl);
@@ -196,9 +262,11 @@ function AppContent() {
         <KinetosisOverlay />
         <StatusBar style={isDarkMode ? "light" : "dark"} />
       </NavigationContainer>
-      <OnboardingTutorial 
-        visible={showOnboarding} 
-        onComplete={handleOnboardingComplete}
+      <AppTour navigationRef={navigationRef} />
+      <WhatsNewModal
+        visible={showWhatsNew && !tour?.active}
+        onClose={handleWhatsNewClose}
+        onTakeTour={handleWhatsNewTour}
       />
     </>
   );
@@ -209,17 +277,21 @@ export default function App() {
     <ErrorBoundary>
       <SafeAreaProvider>
         <ThemeProvider>
-          <AppSettingsProvider>
-            <ReadLaterProvider>
-              <NotesProvider>
-                <AmbientSoundProvider>
-                  <FeedProvider>
-                    <AppContent />
-                  </FeedProvider>
-                </AmbientSoundProvider>
-              </NotesProvider>
-            </ReadLaterProvider>
-          </AppSettingsProvider>
+          <LanguageProvider>
+            <AppSettingsProvider>
+              <ReadLaterProvider>
+                <NotesProvider>
+                  <AmbientSoundProvider>
+                    <FeedProvider>
+                      <TourProvider>
+                        <AppContent />
+                      </TourProvider>
+                    </FeedProvider>
+                  </AmbientSoundProvider>
+                </NotesProvider>
+              </ReadLaterProvider>
+            </AppSettingsProvider>
+          </LanguageProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </ErrorBoundary>
