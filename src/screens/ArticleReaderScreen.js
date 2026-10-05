@@ -16,11 +16,15 @@ import {
   TextInput,
   Animated,
   KeyboardAvoidingView,
+  BackHandler,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
+import { useTranslation } from '../context/LanguageContext';
+import { formatLocalizedDate } from '../utils/formatDate';
 import { useAppSettings } from '../context/AppSettingsContext';
 import { useFeed } from '../context/FeedContext';
 import { useNotes } from '../context/NotesContext';
@@ -32,6 +36,9 @@ import { detectLanguage, getTextDirection, getTextAlignment, getLanguageName } f
 import ArticleImage from '../components/ArticleImage';
 import ErrorBoundary from '../components/ErrorBoundary';
 import CustomAlert from '../components/CustomAlert';
+import { useAutoScroll } from '../hooks/useAutoScroll';
+import { useKeepScreenAwake } from '../hooks/useKeepScreenAwake';
+import { readingFontStyle } from '../config/readingFonts';
 import {
   translateText,
   identifyLanguage,
@@ -80,7 +87,8 @@ function ArticleReaderScreenContent({ route, navigation }) {
     currentSortOrder = 'newest' 
   } = route.params;
   const { theme } = useTheme();
-  const { showImages, showBookmarkIndicators, speechRate, readerHeaderActions, updateReaderHeaderActions, onDeviceLearningEnabled } = useAppSettings();
+  const { t, isRTL: appRTL, formatNumber, language } = useTranslation();
+  const { showImages, showBookmarkIndicators, speechRate, readerHeaderActions, updateReaderHeaderActions, autoScrollEnabled, autoScrollDelay, autoScrollSpeed, keepAwakeEnabled, readingFont, autoTranslate, onDeviceLearningEnabled } = useAppSettings();
   const { markArticleRead, articles: allArticles } = useFeed();
   
   // Resolve article from deep link if needed
@@ -93,10 +101,10 @@ function ArticleReaderScreenContent({ route, navigation }) {
         feedTitle: articleFeedName,
         links: [{ url: articleLink }], 
         content: '' 
-      } : { title: 'Article not found', link: '', links: [], content: '', feedTitle: '' });
+      } : { title: t('reader.articleNotFound'), link: '', links: [], content: '', feedTitle: '' });
   
   const { getNote, setNote, hasNote } = useNotes();
-  const { addToReadLater, removeFromReadLater, isInReadLater } = useReadLater();
+  const { addToReadLater, removeFromReadLater, updateReadLaterArticle, isInReadLater } = useReadLater();
   const { setShowPlaylist: openSoundPlaylist, isPlaying: isSoundPlaying } = useAmbientSound();
   const [fullContent, setFullContent] = useState(null);
   const [contentBlocks, setContentBlocks] = useState(null); // Readability content blocks (text + images)
@@ -114,6 +122,11 @@ function ArticleReaderScreenContent({ route, navigation }) {
   const contentHeightRef = useRef(0);
   const viewportHeightRef = useRef(0);
   const hasAutoScrolled = useRef(false);
+  // Auto-scroll defers to a pending reading-position restore, but only briefly:
+  // after this moment it stops waiting so auto-scroll can't be blocked forever.
+  const bookmarkBlockUntilRef = useRef(0);
+  const userInteractedRef = useRef(false); // user grabbed the scroll — stop auto-restoring
+  const bookmarkSettleTimer = useRef(null); // debounce until content height stops growing
   const bookmarkFlashAnim = useRef(new Animated.Value(0)).current;
   const [contentReady, setContentReady] = useState(false);
   const [measuredContentHeight, setMeasuredContentHeight] = useState(0);
@@ -131,6 +144,7 @@ function ArticleReaderScreenContent({ route, navigation }) {
   const [translationProgress, setTranslationProgress] = useState('');
   const [showLanguagePicker, setShowLanguagePicker] = useState(false);
   const [targetLangCode, setTargetLangCode] = useState('en');
+  const [targetLangLoaded, setTargetLangLoaded] = useState(false); // true once the real saved target is loaded (not the 'en' placeholder)
   const [detectedSourceLang, setDetectedSourceLang] = useState(null); // BCP-47 code
   const [languageSearchQuery, setLanguageSearchQuery] = useState('');
   const [translationMode, setTranslationMode] = useState(TRANSLATION_MODES.AUTO);
@@ -143,6 +157,11 @@ function ArticleReaderScreenContent({ route, navigation }) {
 
   // Overflow menu state
   const [showOverflowMenu, setShowOverflowMenu] = useState(false);
+
+  // Highlighting state (saved articles only): persisted paragraph indices +
+  // whether highlight mode (tap-a-paragraph-to-toggle) is active.
+  const [highlights, setHighlights] = useState(article?.highlights || []);
+  const [highlightMode, setHighlightMode] = useState(false);
 
   // TTS state
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -291,12 +310,24 @@ function ArticleReaderScreenContent({ route, navigation }) {
             }
           } catch (e) { /* use existing content */ }
         }
+        // Persist an already-loaded translation so it survives offline.
+        if (translatedContent) {
+          enhanced.cachedTranslation = {
+            targetLangCode,
+            translatedTitle: translatedTitle || null,
+            translatedContent,
+            method: translationMethod || 'online',
+            sourceLangCode: detectedSourceLang || null,
+            cachedAt: new Date().toISOString(),
+            showTranslated: isTranslated,
+          };
+        }
         addToReadLater(enhanced);
       } finally {
         setIsSaving(false);
       }
     }
-  }, [isSaved, article, addToReadLater, removeFromReadLater]);
+  }, [isSaved, article, addToReadLater, removeFromReadLater, translatedContent, translationMethod, translatedTitle, targetLangCode, detectedSourceLang, isTranslated]);
 
   // Check if article language matches target translation language
   const isSameLanguage = useMemo(() => {
@@ -316,6 +347,12 @@ function ArticleReaderScreenContent({ route, navigation }) {
           const data = JSON.parse(saved);
           setHasBookmark(true);
           setBookmarkScrollPercent(data.scrollPercent);
+        } else {
+          // No bookmark for this article — clear any leftover state from a
+          // previously viewed article (this screen instance can be reused when
+          // navigating between articles without remounting).
+          setHasBookmark(false);
+          setBookmarkScrollPercent(null);
         }
       } catch (e) {
         console.warn('Failed to load bookmark:', e);
@@ -324,47 +361,101 @@ function ArticleReaderScreenContent({ route, navigation }) {
     loadBookmark();
   }, [bookmarkKey]);
 
-  // Auto-scroll to bookmark when content finishes loading
+  // Restore the saved reading position once the content height has settled.
+  // On long / image-heavy articles the ScrollView's content height keeps growing
+  // as images load, so scrolling immediately lands short ("stops in the middle").
+  // We debounce until the height stops changing, then scroll once to the final spot.
+  const tryRestoreBookmark = useCallback(() => {
+    if (bookmarkScrollPercent == null || hasAutoScrolled.current || userInteractedRef.current || loading) return;
+    const vH = viewportHeightRef.current;
+    const cH = contentHeightRef.current;
+    if (vH <= 0 || cH <= vH) return;
+    // (Re)arm the settle timer: every content-size change pushes it back, so it
+    // only fires once the layout has been stable for a beat (final height).
+    if (bookmarkSettleTimer.current) clearTimeout(bookmarkSettleTimer.current);
+    bookmarkSettleTimer.current = setTimeout(() => {
+      bookmarkSettleTimer.current = null;
+      // Re-check guards: the user may have grabbed the scroll while we waited.
+      if (hasAutoScrolled.current || userInteractedRef.current) return;
+      const finalVH = viewportHeightRef.current;
+      const finalCH = contentHeightRef.current;
+      if (finalVH <= 0 || finalCH <= finalVH) return;
+      hasAutoScrolled.current = true;
+      // scrollPercent is the center of the viewport as a fraction of content height
+      const targetY = Math.max(0, bookmarkScrollPercent * finalCH - finalVH / 2);
+      scrollViewRef.current?.scrollTo({ y: targetY, animated: true });
+      Animated.sequence([
+        Animated.timing(bookmarkFlashAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
+        Animated.delay(1500),
+        Animated.timing(bookmarkFlashAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
+      ]).start();
+    }, 500);
+  }, [bookmarkScrollPercent, loading, bookmarkFlashAnim]);
+
   const handleContentSizeChange = useCallback((w, h) => {
     contentHeightRef.current = h;
     setMeasuredContentHeight(h);
     if (h > 0 && viewportHeightRef.current > 0) {
       setContentReady(true);
     }
-  }, []);
+    // Content grew (e.g. an image loaded) — keep waiting for it to settle.
+    tryRestoreBookmark();
+  }, [tryRestoreBookmark]);
 
-  // Effect to auto-scroll when all conditions are met
+  // Re-attempt the restore whenever its inputs become available (bookmark loaded
+  // from storage, fetch finished, viewport/content first measured).
   useEffect(() => {
-    if (
-      bookmarkScrollPercent != null &&
-      !hasAutoScrolled.current &&
-      !loading &&
-      contentReady
-    ) {
-      hasAutoScrolled.current = true;
-      const cH = contentHeightRef.current;
-      const vH = viewportHeightRef.current;
-      if (cH > vH) {
-        // scrollPercent is the center of viewport as fraction of content height
-        const targetY = Math.max(0, bookmarkScrollPercent * cH - vH / 2);
-        setTimeout(() => {
-          scrollViewRef.current?.scrollTo({ y: targetY, animated: true });
-          Animated.sequence([
-            Animated.timing(bookmarkFlashAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
-            Animated.delay(1500),
-            Animated.timing(bookmarkFlashAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
-          ]).start();
-        }, 400);
-      }
-    }
-  }, [bookmarkScrollPercent, loading, contentReady, bookmarkFlashAnim]);
+    tryRestoreBookmark();
+  }, [bookmarkScrollPercent, loading, contentReady, tryRestoreBookmark]);
+
+  // Cancel any pending restore when leaving the screen.
+  useEffect(() => {
+    return () => {
+      if (bookmarkSettleTimer.current) clearTimeout(bookmarkSettleTimer.current);
+    };
+  }, []);
 
   const handleScrollViewLayout = useCallback((event) => {
     viewportHeightRef.current = event.nativeEvent.layout.height;
     if (contentHeightRef.current > 0 && event.nativeEvent.layout.height > 0) {
       setContentReady(true);
     }
-  }, []);
+    tryRestoreBookmark();
+  }, [tryRestoreBookmark]);
+
+  // Auto-scroll (same Settings > Auto-Scroll option as the feed list): drifts
+  // the article down after the idle delay. Held back while content is still
+  // loading, while a bookmark restore is pending (it would fight the animated
+  // jump), and while TTS reads (TTS follows its highlighted paragraph itself).
+  const autoScroll = useAutoScroll({
+    enabled: autoScrollEnabled,
+    delaySeconds: autoScrollDelay,
+    speedPercent: autoScrollSpeed,
+    getOffset: () => currentScrollY.current,
+    getMaxOffset: () => Math.max(0, contentHeightRef.current - viewportHeightRef.current),
+    scrollTo: (y) => scrollViewRef.current?.scrollTo({ y, animated: false }),
+    isBlocked: () =>
+      loading || !contentReady || isSpeaking ||
+      (bookmarkScrollPercent != null && !hasAutoScrolled.current && !userInteractedRef.current
+        && Date.now() < bookmarkBlockUntilRef.current),
+  });
+
+  // Keep the screen on while auto-scrolling an article.
+  useKeepScreenAwake(autoScrollEnabled && keepAwakeEnabled, 'feedwell-reader');
+
+  useFocusEffect(
+    useCallback(
+      () => {
+        if (!loading && contentReady && !isSpeaking) {
+          autoScroll.arm();
+        } else {
+          autoScroll.pause();
+        }
+        return autoScroll.pause;
+      },
+      [loading, contentReady, isSpeaking, translating, isTranslated, autoScrollEnabled, autoScrollDelay, autoScrollSpeed, autoScroll.arm, autoScroll.pause]
+    )
+  );
 
   const saveBookmark = useCallback(async () => {
     const cH = contentHeightRef.current;
@@ -405,13 +496,13 @@ function ArticleReaderScreenContent({ route, navigation }) {
     if (hasBookmark) {
       setAlertConfig({
         visible: true,
-        title: 'Reading Bookmark',
-        message: 'What would you like to do?',
+        title: t('reader.bookmarkDialogTitle'),
+        message: t('reader.bookmarkDialogMessage'),
         icon: 'bookmark',
         buttons: [
-          { text: 'Update Position', onPress: saveBookmark },
-          { text: 'Remove Bookmark', onPress: removeBookmark, style: 'destructive' },
-          { text: 'Cancel', style: 'cancel' },
+          { text: t('reader.updatePosition'), onPress: saveBookmark },
+          { text: t('reader.removeBookmark'), onPress: removeBookmark, style: 'destructive' },
+          { text: t('common.cancel'), style: 'cancel' },
         ],
       });
     } else {
@@ -422,12 +513,12 @@ function ArticleReaderScreenContent({ route, navigation }) {
   const handleIndicatorPress = useCallback(() => {
     setAlertConfig({
       visible: true,
-      title: 'Reading Bookmark',
-      message: 'Remove your saved reading position?',
+      title: t('reader.bookmarkDialogTitle'),
+      message: t('reader.removeBookmarkConfirm'),
       icon: 'bookmark',
       buttons: [
-        { text: 'Remove Bookmark', onPress: removeBookmark, style: 'destructive' },
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('reader.removeBookmark'), onPress: removeBookmark, style: 'destructive' },
+        { text: t('common.cancel'), style: 'cancel' },
       ],
     });
   }, [removeBookmark]);
@@ -491,16 +582,91 @@ function ArticleReaderScreenContent({ route, navigation }) {
 
   // Load saved target language and translation mode on mount
   useEffect(() => {
-    loadTargetLanguage().then(code => setTargetLangCode(code));
-    loadTranslationMode().then(mode => setTranslationMode(mode));
+    // Both at once: targetLangLoaded gates every automatic translation, and it
+    // must not open before the saved mode is known (it defaults to Auto, which
+    // would go online for someone who chose Offline only).
+    Promise.all([loadTargetLanguage(), loadTranslationMode()]).then(([code, mode]) => {
+      setTranslationMode(mode);
+      setTargetLangCode(code);
+      setTargetLangLoaded(true);
+    });
   }, []);
+
+  // Restore a previously cached translation for saved articles so it can be
+  // re-read without translating again. Only applies when the cached target
+  // language matches the user's current target language. Gated on targetLangLoaded
+  // so we never match against the initial 'en' placeholder before the real target
+  // language has been read from storage. If the user was viewing the article
+  // translated last time (showTranslated), reopen it translated.
+  useEffect(() => {
+    if (!targetLangLoaded) return;
+    const cached = article?.cachedTranslation;
+    if (cached && cached.translatedContent && cached.targetLangCode === targetLangCode) {
+      setTranslatedTitle(cached.translatedTitle || null);
+      setTranslatedContent(cached.translatedContent);
+      setTranslationMethod(cached.method || 'online');
+      if (cached.sourceLangCode) setDetectedSourceLang(cached.sourceLangCode);
+      if (cached.showTranslated !== false) setIsTranslated(true);
+    }
+  }, [article?.id, targetLangCode, targetLangLoaded]);
+
+  // Quality upgrade: if a saved article's cached translation was made with the
+  // OFFLINE model, silently re-translate it ONLINE when internet is available and
+  // replace the cache (and the displayed text) with the higher-quality version.
+  const upgradeAttemptedRef = useRef(false);
+  useEffect(() => {
+    const cached = article?.cachedTranslation;
+    if (
+      !targetLangLoaded || loading || upgradeAttemptedRef.current ||
+      translationMode === TRANSLATION_MODES.OFFLINE ||
+      !cached || cached.method !== 'offline' ||
+      cached.targetLangCode !== targetLangCode ||
+      !fullContent || !article?.id || !isInReadLater(article.id)
+    ) return;
+    upgradeAttemptedRef.current = true;
+    (async () => {
+      try {
+        const src = cached.sourceLangCode || detectedSourceLang || languageInfo?.code || 'auto';
+        const titleResult = await translateText(article.title, src, targetLangCode, null, TRANSLATION_MODES.ONLINE);
+        const contentResult = await translateText(fullContent, src, targetLangCode, null, TRANSLATION_MODES.ONLINE);
+        if (contentResult.method !== 'online' || !contentResult.text) return;
+        setTranslatedTitle(titleResult.text || null);
+        setTranslatedContent(contentResult.text);
+        setTranslationMethod('online');
+        updateReadLaterArticle(article.id, {
+          cachedTranslation: {
+            ...cached,
+            translatedTitle: titleResult.text || null,
+            translatedContent: contentResult.text,
+            method: 'online',
+            cachedAt: new Date().toISOString(),
+          },
+        });
+      } catch (e) {
+        // No internet or online endpoint unavailable — keep the offline version.
+        console.log('Online upgrade of cached translation skipped:', e?.message);
+      }
+    })();
+  }, [article?.id, targetLangCode, targetLangLoaded, loading, fullContent, translationMode]);
 
   // Track if we've already marked this article as read
   const hasMarkedReadRef = useRef(false);
 
   useEffect(() => {
+    // Reset bookmark-restore + translation-upgrade + highlight state for the newly opened article.
+    hasAutoScrolled.current = false;
+    userInteractedRef.current = false;
+    upgradeAttemptedRef.current = false;
+    // Give the restore ~12s to happen; after that auto-scroll stops waiting.
+    bookmarkBlockUntilRef.current = Date.now() + 12000;
+    setHighlights(article?.highlights || []);
+    setHighlightMode(false);
+    if (bookmarkSettleTimer.current) {
+      clearTimeout(bookmarkSettleTimer.current);
+      bookmarkSettleTimer.current = null;
+    }
     fetchFullArticle();
-    
+
     // Cleanup function
     return () => {
       hasMarkedReadRef.current = false;
@@ -620,7 +786,7 @@ function ArticleReaderScreenContent({ route, navigation }) {
       
       // If we still have very short content, show a message
       if (content.length < 50) {
-        content = content + '\n\n[Full article content may not be available in reader mode. Use the browser button (🌐) to view the complete article.]';
+        content = content + '\n\n' + t('reader.contentUnavailableInline');
       }
       
       setFullContent(content);
@@ -638,7 +804,7 @@ function ArticleReaderScreenContent({ route, navigation }) {
       }
     } catch (err) {
       console.error('Error loading article:', err);
-      setError('Unable to load article content. Please try using the browser button to view the full article.');
+      setError(t('reader.loadErrorMessage'));
       // Fallback to RSS content
       setFullContent(article.content || article.description || '');
     } finally {
@@ -646,16 +812,33 @@ function ArticleReaderScreenContent({ route, navigation }) {
     }
   };
 
-  const handleTranslate = async () => {
+  // Persist whether the user wants this saved article shown translated, so the
+  // next visit reopens it the same way.
+  const persistShowTranslated = useCallback((show) => {
+    if (!article?.id || !isInReadLater(article.id)) return;
+    const cached = article?.cachedTranslation;
+    if (cached && cached.translatedContent) {
+      updateReadLaterArticle(article.id, { cachedTranslation: { ...cached, showTranslated: show } });
+    }
+  }, [article, isInReadLater, updateReadLaterArticle]);
+
+  // options.auto: started by the Auto-Translate setting rather than a tap. Auto
+  // runs never toggle a translation off and never raise alerts. (A tap passes the
+  // press event here, which has no auto field.)
+  const handleTranslate = async (options) => {
+    const auto = options?.auto === true;
     // If already translated, toggle back to original
     if (isTranslated) {
+      if (auto) return;
       setIsTranslated(false);
+      persistShowTranslated(false);
       return;
     }
 
     // If we already have a translation cached, show it
     if (translatedContent) {
       setIsTranslated(true);
+      persistShowTranslated(true);
       return;
     }
 
@@ -663,13 +846,13 @@ function ArticleReaderScreenContent({ route, navigation }) {
     if (!contentToTranslate || contentToTranslate.length === 0) return;
 
     setTranslating(true);
-    setTranslationProgress('Detecting language...');
+    setTranslationProgress(t('reader.progressDetecting'));
 
     try {
       // Step 1: Detect source language (returns BCP-47 code)
       let sourceLangCode = detectedSourceLang;
       if (!sourceLangCode) {
-        const identified = await identifyLanguage(contentToTranslate);
+        const identified = await identifyLanguage(contentToTranslate, translationMode);
         if (identified) {
           sourceLangCode = identified;
           setDetectedSourceLang(identified);
@@ -682,14 +865,19 @@ function ArticleReaderScreenContent({ route, navigation }) {
 
       // Check if source and target are the same
       if (sourceLangCode === targetLangCode) {
+        if (auto) {
+          setTranslating(false);
+          setTranslationProgress('');
+          return;
+        }
         setAlertConfig({
           visible: true,
-          title: 'Same Language',
-          message: `The article appears to be in ${getDisplayName(sourceLangCode)}. Please choose a different target language.`,
+          title: t('reader.sameLanguageTitle'),
+          message: t('reader.sameLanguageMessage', { language: getDisplayName(sourceLangCode) }),
           icon: 'language-outline',
           buttons: [
-            { text: 'Change Language', onPress: () => setShowLanguagePicker(true) },
-            { text: 'Cancel', style: 'cancel' },
+            { text: t('reader.changeLanguage'), onPress: () => setShowLanguagePicker(true) },
+            { text: t('common.cancel'), style: 'cancel' },
           ],
         });
         setTranslating(false);
@@ -698,7 +886,7 @@ function ArticleReaderScreenContent({ route, navigation }) {
       }
 
       // Step 2: Translate title
-      setTranslationProgress('Translating title...');
+      setTranslationProgress(t('reader.progressTranslatingTitle'));
       const titleResult = await translateText(
         article.title,
         sourceLangCode,
@@ -720,20 +908,55 @@ function ArticleReaderScreenContent({ route, navigation }) {
       setTranslatedContent(contentResult.text);
       setTranslationMethod(contentResult.method);
       setIsTranslated(true);
+
+      // Cache the translation onto the saved article so it can be read again
+      // (even offline) without re-translating. Offline-made translations are
+      // cached too and get silently upgraded to online quality later.
+      if (isInReadLater(article.id)) {
+        updateReadLaterArticle(article.id, {
+          cachedTranslation: {
+            targetLangCode,
+            translatedTitle: titleResult.text || null,
+            translatedContent: contentResult.text,
+            method: contentResult.method,
+            sourceLangCode: sourceLangCode || null,
+            cachedAt: new Date().toISOString(),
+            showTranslated: true,
+          },
+        });
+      }
     } catch (error) {
+      // Log the technical detail; show the user only the localized friendly message.
       console.error('Translation error:', error);
+      if (auto) return; // the finally block still clears the progress state
       setAlertConfig({
         visible: true,
-        title: 'Translation Failed',
-        message: error.message || 'Unable to translate this article. Please check your connection for initial model download.',
+        title: t('reader.translationFailedTitle'),
+        message: t('reader.translationFailedMessage'),
         icon: 'alert-circle-outline',
-        buttons: [{ text: 'OK' }],
+        buttons: [{ text: t('common.ok') }],
       });
     } finally {
       setTranslating(false);
       setTranslationProgress('');
     }
   };
+
+  // Auto-Translate: once the article has loaded, translate it into the default
+  // language without a tap. One attempt per article. A saved translation for this
+  // language is left to the restore effect above, so an article the reader
+  // switched back to the original stays in the original.
+  const autoTranslateTriedRef = useRef(false);
+  useEffect(() => { autoTranslateTriedRef.current = false; }, [article?.id]);
+  useEffect(() => {
+    if (!autoTranslate || autoTranslateTriedRef.current) return;
+    if (!targetLangLoaded || loading || !contentReady || !fullContent) return;
+    if (isTranslated || translatedContent || translating || isSameLanguage) return;
+    if (article?.cachedTranslation?.targetLangCode === targetLangCode) return;
+    autoTranslateTriedRef.current = true;
+    handleTranslate({ auto: true });
+  }, [autoTranslate, targetLangLoaded, loading, contentReady, fullContent, isTranslated,
+      translatedContent, translating, isSameLanguage, targetLangCode, article?.cachedTranslation]);
 
   const handleChangeTargetLanguage = async (langCode) => {
     setTargetLangCode(langCode);
@@ -764,7 +987,9 @@ function ArticleReaderScreenContent({ route, navigation }) {
   const handleShare = async () => {
     try {
       const shareOptions = {
-        message: Platform.OS === 'ios' ? `📰 Shared via FeedWell\n\n${article.title}` : `📰 Shared via FeedWell\n\n${article.title}\n\n${article.url}`,
+        message: Platform.OS === 'ios'
+          ? `📰 ${t('reader.sharedVia')}\n\n${article.title}`
+          : `📰 ${t('reader.sharedVia')}\n\n${article.title}\n\n${article.url}`,
         url: Platform.OS === 'ios' ? article.url : undefined,
         title: article.title,
       };
@@ -788,22 +1013,84 @@ function ArticleReaderScreenContent({ route, navigation }) {
     }
   };
 
+  // Back from an article always lands on the list it was opened from, skipping
+  // the preview screen. It must pop, never navigate(): since React Navigation 7,
+  // navigate('FeedList') pushes a second list on top of the article instead of
+  // returning to the first one, so Back on that list reopened the article and
+  // the stack grew with every article read.
+  const handleBackNavigation = useCallback(() => {
+    const stackState = navigation.getState?.();
+    const listName = ['FeedList', 'ReadLaterList'].find((name) => stackState?.routeNames?.includes(name));
+
+    if (listName) {
+      // popToTop also clears anything a corrupted stack left below this article.
+      if (stackState.routes?.[0]?.name === listName) {
+        navigation.popToTop();
+      } else {
+        // Opened from Home, so the stack holds no list yet: swap the reader for it.
+        navigation.popTo(listName);
+      }
+      return true;
+    }
+
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return true;
+    }
+
+    navigation.navigate('Feeds', { screen: 'FeedList', pop: true });
+    return true;
+  }, [navigation]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const onHardwareBackPress = () => handleBackNavigation();
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBackPress);
+      return () => subscription.remove();
+    }, [handleBackNavigation])
+  );
+
+  // Toggle a paragraph highlight (persisted on the saved article).
+  const toggleHighlight = useCallback((index) => {
+    if (!article?.id || !isInReadLater(article.id)) return;
+    setHighlights((prev) => {
+      const next = prev.includes(index) ? prev.filter((i) => i !== index) : [...prev, index];
+      updateReadLaterArticle(article.id, { highlights: next });
+      return next;
+    });
+  }, [article?.id, isInReadLater, updateReadLaterArticle]);
+
+  const handleHighlightAction = useCallback(() => {
+    if (!isSaved) {
+      setAlertConfig({
+        visible: true,
+        title: t('reader.actionHighlight'),
+        message: t('reader.highlightNeedsSaved'),
+        icon: 'color-wand-outline',
+        buttons: [{ text: t('common.ok') }],
+      });
+      return;
+    }
+    setShowOverflowMenu(false);
+    setHighlightMode((m) => !m);
+  }, [isSaved, t]);
+
   // All reader actions definition (order defines overflow menu order)
   // MUST be placed after all handler definitions to avoid undefined references
   const MAX_PINNED = 4;
   const allActions = useMemo(() => [
     {
       id: 'bookmark',
-      label: 'Bookmark',
-      shortLabel: 'Bookmark',
+      label: t('reader.actionBookmark'),
+      shortLabel: t('reader.actionBookmarkShort'),
       icon: hasBookmark ? 'bookmark' : 'bookmark-outline',
       color: hasBookmark ? theme.colors.primary : theme.colors.text,
       onPress: handleBookmarkPress,
     },
     {
       id: 'translate',
-      label: 'Translate',
-      shortLabel: 'Translate',
+      label: t('reader.actionTranslate'),
+      shortLabel: t('reader.actionTranslateShort'),
       icon: isTranslated ? 'swap-horizontal' : 'language-outline',
       color: isTranslated ? theme.colors.success : theme.colors.text,
       onPress: isSameLanguage ? () => setShowLanguagePicker(true) : handleTranslate,
@@ -813,24 +1100,24 @@ function ArticleReaderScreenContent({ route, navigation }) {
     },
     {
       id: 'readAloud',
-      label: 'Read Aloud',
-      shortLabel: 'Read',
+      label: t('reader.actionReadAloud'),
+      shortLabel: t('reader.actionReadAloudShort'),
       icon: isSpeaking ? 'volume-high' : 'volume-high-outline',
       color: isSpeaking ? theme.colors.primary : theme.colors.text,
       onPress: handleReadAloud,
     },
     {
       id: 'browser',
-      label: 'Open in Browser',
-      shortLabel: 'Browser',
+      label: t('reader.actionOpenInBrowser'),
+      shortLabel: t('reader.actionOpenInBrowserShort'),
       icon: 'globe-outline',
       color: theme.colors.text,
       onPress: handleOpenBrowser,
     },
     {
       id: 'save',
-      label: isSaved ? 'Unsave Article' : 'Save for Later',
-      shortLabel: isSaved ? 'Unsave' : 'Save',
+      label: isSaved ? t('reader.actionUnsave') : t('reader.actionSaveForLater'),
+      shortLabel: isSaved ? t('reader.actionUnsaveShort') : t('reader.actionSaveShort'),
       icon: isSaved ? 'save' : 'save-outline',
       color: isSaved ? theme.colors.primary : theme.colors.text,
       onPress: handleSaveArticle,
@@ -838,29 +1125,37 @@ function ArticleReaderScreenContent({ route, navigation }) {
     },
     {
       id: 'notes',
-      label: 'Notes',
-      shortLabel: 'Notes',
+      label: t('reader.actionNotes'),
+      shortLabel: t('reader.actionNotesShort'),
       icon: hasNote(article?.id) ? 'document-text' : 'document-text-outline',
       color: hasNote(article?.id) ? theme.colors.primary : theme.colors.text,
       onPress: () => { setNoteText(articleNote ? articleNote.text : ''); setShowNotesModal(true); },
     },
     {
+      id: 'highlight',
+      label: t('reader.actionHighlight'),
+      shortLabel: t('reader.actionHighlightShort'),
+      icon: highlightMode ? 'color-wand' : 'color-wand-outline',
+      color: highlightMode ? theme.colors.primary : theme.colors.text,
+      onPress: handleHighlightAction,
+    },
+    {
       id: 'share',
-      label: 'Share',
-      shortLabel: 'Share',
+      label: t('reader.actionShare'),
+      shortLabel: t('reader.actionShareShort'),
       icon: 'share-outline',
       color: theme.colors.text,
       onPress: handleShare,
     },
     {
       id: 'sounds',
-      label: 'Ambient Sounds',
-      shortLabel: 'Sounds',
+      label: t('reader.actionAmbientSounds'),
+      shortLabel: t('reader.actionAmbientSoundsShort'),
       icon: isSoundPlaying ? 'musical-notes' : 'musical-notes-outline',
       color: isSoundPlaying ? theme.colors.primary : theme.colors.text,
       onPress: () => openSoundPlaylist(true),
     },
-  ], [hasBookmark, isTranslated, isSameLanguage, translating, isSpeaking, isSaved, isSaving, isSoundPlaying, article?.id, articleNote, theme.colors, handleBookmarkPress, handleTranslate, handleReadAloud, handleOpenBrowser, handleSaveArticle, handleShare, openSoundPlaylist]);
+  ], [hasBookmark, isTranslated, isSameLanguage, translating, isSpeaking, isSaved, isSaving, isSoundPlaying, highlightMode, article?.id, articleNote, theme.colors, t, handleBookmarkPress, handleTranslate, handleReadAloud, handleOpenBrowser, handleSaveArticle, handleShare, handleHighlightAction, openSoundPlaylist]);
 
   const pinnedActions = useMemo(() => {
     return readerHeaderActions
@@ -905,20 +1200,24 @@ function ArticleReaderScreenContent({ route, navigation }) {
     setShowScrollToTop(offsetY > 200);
   };
 
+  const handleScrollBeginDrag = useCallback(() => {
+    // The user took over scrolling — don't yank them back to the bookmark.
+    userInteractedRef.current = true;
+    if (bookmarkSettleTimer.current) {
+      clearTimeout(bookmarkSettleTimer.current);
+      bookmarkSettleTimer.current = null;
+    }
+  }, []);
+
   const handleScrollToTop = () => {
     scrollViewRef.current?.scrollTo({ y: 0, animated: true });
   };
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const formatDate = (dateString) => formatLocalizedDate(dateString, language, formatNumber, {
+    withYear: true,
+    withTime: true,
+    localeOptions: { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' },
+  });
 
   const styles = StyleSheet.create({
     container: {
@@ -960,10 +1259,12 @@ function ArticleReaderScreenContent({ route, navigation }) {
     },
     content: {
       flex: 1,
+      backgroundColor: theme.colors.background,
     },
     contentInner: {
       paddingVertical: 20,
       paddingHorizontal: 32,
+      backgroundColor: theme.colors.background,
     },
     articleHeader: {
       marginBottom: 16,
@@ -1005,7 +1306,11 @@ function ArticleReaderScreenContent({ route, navigation }) {
       fontSize: 18,
       color: theme.colors.text,
       lineHeight: 28,
-      fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
+      // Settings > Reading Font. 'system' contributes no fontFamily, so the
+      // long-standing default (Georgia on iOS, serif on Android) still applies.
+      ...(readingFont === 'system'
+        ? { fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif' }
+        : readingFontStyle(readingFont)),
     },
     inlineImageContainer: {
       marginVertical: 12,
@@ -1144,7 +1449,8 @@ function ArticleReaderScreenContent({ route, navigation }) {
       flex: 1,
       fontSize: 15,
       color: theme.colors.text,
-      marginLeft: 8,
+      marginLeft: appRTL ? 0 : 8,
+      marginRight: appRTL ? 8 : 0,
       paddingVertical: 4,
     },
     languageList: {
@@ -1378,7 +1684,8 @@ function ArticleReaderScreenContent({ route, navigation }) {
       fontSize: 14,
       fontWeight: '600',
       flex: 1,
-      marginLeft: 10,
+      marginLeft: appRTL ? 0 : 10,
+      marginRight: appRTL ? 10 : 0,
     },
     ttsStopButton: {
       padding: 4,
@@ -1416,7 +1723,8 @@ function ArticleReaderScreenContent({ route, navigation }) {
     },
     overflowItemText: {
       fontSize: 16,
-      marginLeft: 14,
+      marginLeft: appRTL ? 0 : 14,
+      marginRight: appRTL ? 14 : 0,
       fontWeight: '500',
       flex: 1,
     },
@@ -1427,7 +1735,8 @@ function ArticleReaderScreenContent({ route, navigation }) {
     },
     overflowPinButton: {
       padding: 8,
-      marginLeft: 8,
+      marginLeft: appRTL ? 0 : 8,
+      marginRight: appRTL ? 8 : 0,
     },
     overflowDivider: {
       height: StyleSheet.hairlineWidth,
@@ -1442,16 +1751,16 @@ function ArticleReaderScreenContent({ route, navigation }) {
   });
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+    <SafeAreaView edges={["top", "left", "right"]} style={styles.container}>
+      <View style={[styles.header, { flexDirection: appRTL ? 'row-reverse' : 'row' }]}>
         <TouchableOpacity
           style={styles.headerButton}
-          onPress={() => navigation.goBack()}
+          onPress={handleBackNavigation}
         >
-          <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+          <Ionicons name={appRTL ? 'arrow-forward' : 'arrow-back'} size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Reader</Text>
-        <View style={styles.headerActions}>
+        <Text style={styles.headerTitle}>{t('reader.headerTitle')}</Text>
+        <View style={[styles.headerActions, { flexDirection: appRTL ? 'row-reverse' : 'row' }]}>
           {pinnedActions.map(action => (
             <TouchableOpacity
               key={action.id}
@@ -1473,20 +1782,27 @@ function ArticleReaderScreenContent({ route, navigation }) {
             onPress={() => setShowOverflowMenu(true)}
           >
             <Ionicons name="ellipsis-vertical" size={20} color={theme.colors.text} />
-            <Text style={[styles.headerButtonLabel, { color: theme.colors.textSecondary }]}>More</Text>
+            <Text style={[styles.headerButtonLabel, { color: theme.colors.textSecondary }]}>{t('reader.more')}</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <ScrollView 
         ref={scrollViewRef}
         style={styles.content} 
         showsVerticalScrollIndicator={false}
         onScroll={handleScroll}
+        onScrollBeginDrag={(e) => { handleScrollBeginDrag(e); autoScroll.onScrollBeginDrag(); }}
         scrollEventThrottle={16}
         onContentSizeChange={handleContentSizeChange}
         onLayout={handleScrollViewLayout}
+        onTouchStart={autoScroll.onTouchStart}
+        onTouchMove={autoScroll.onTouchMove}
+        onTouchEnd={autoScroll.onTouchEnd}
+        onScrollEndDrag={autoScroll.onScrollEndDrag}
+        onMomentumScrollEnd={autoScroll.onMomentumScrollEnd}
+        onTouchCancel={autoScroll.onTouchCancel}
       >
         <View style={styles.contentInner}>
         <View style={styles.articleHeader}>
@@ -1514,7 +1830,7 @@ function ArticleReaderScreenContent({ route, navigation }) {
 
         {article.authors && article.authors.length > 0 && (
           <Text selectable={true} style={styles.articleAuthor}>
-            By {article.authors.map(author => author.name).join(', ')}
+            {t('reader.byAuthor', { author: article.authors.map(author => author.name).join(', ') })}
           </Text>
         )}
 
@@ -1529,20 +1845,20 @@ function ArticleReaderScreenContent({ route, navigation }) {
         {loading && (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
-            <Text style={styles.loadingText}>Loading article...</Text>
+            <Text style={styles.loadingText}>{t('reader.loadingArticle')}</Text>
           </View>
         )}
 
         {error && (
           <View style={styles.errorContainer}>
             <Ionicons name="alert-circle-outline" size={48} color={theme.colors.error} />
-            <Text style={styles.errorTitle}>Failed to load article</Text>
+            <Text style={styles.errorTitle}>{t('reader.loadErrorTitle')}</Text>
             <Text style={styles.errorText}>{error}</Text>
             <TouchableOpacity
               style={styles.retryButton}
               onPress={fetchFullArticle}
             >
-              <Text style={styles.retryButtonText}>Try Again</Text>
+              <Text style={styles.retryButtonText}>{t('common.retry')}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1560,12 +1876,43 @@ function ArticleReaderScreenContent({ route, navigation }) {
 
             {/* Show translation banner when translated */}
             {isTranslated && (
-              <View style={styles.translatedBanner}>
+              <View style={[styles.translatedBanner, { flexDirection: appRTL ? 'row-reverse' : 'row' }]}>
                 <Ionicons name="checkmark-circle" size={16} color={theme.colors.success} />
                 <Text style={styles.translatedBannerText}>
-                  Translated to {getDisplayName(targetLangCode)}
-                  {detectedSourceLang ? ` from ${getDisplayName(detectedSourceLang)}` : ''}
-                  {translationMethod === 'online' ? ' (Google Translate)' : translationMethod === 'offline' ? ' (Offline)' : ''}
+                  {(detectedSourceLang
+                    ? t('reader.translatedFromTo', { source: getDisplayName(detectedSourceLang), target: getDisplayName(targetLangCode) })
+                    : t('reader.translatedTo', { target: getDisplayName(targetLangCode) }))
+                    + (translationMethod === 'online'
+                        ? ' ' + t('reader.translationMethodOnline')
+                        : translationMethod === 'offline'
+                          ? ' ' + t('reader.translationMethodOffline')
+                          : '')}
+                </Text>
+              </View>
+            )}
+
+            {/* Highlight-mode hint */}
+            {highlightMode && (
+              <View style={{
+                flexDirection: appRTL ? 'row-reverse' : 'row',
+                alignItems: 'center',
+                backgroundColor: theme.colors.warning + '22',
+                borderRadius: 10,
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                marginBottom: 14,
+              }}>
+                <Ionicons name="color-wand" size={16} color={theme.colors.warning} />
+                <Text style={{
+                  color: theme.colors.text,
+                  fontSize: 13,
+                  flex: 1,
+                  marginLeft: appRTL ? 0 : 8,
+                  marginRight: appRTL ? 8 : 0,
+                  textAlign: appRTL ? 'right' : 'left',
+                  writingDirection: appRTL ? 'rtl' : 'ltr',
+                }}>
+                  {t('reader.highlightModeHint')}
                 </Text>
               </View>
             )}
@@ -1584,7 +1931,8 @@ function ArticleReaderScreenContent({ route, navigation }) {
                         source={{ uri: img.src }}
                         style={styles.inlineImage}
                         resizeMode="contain"
-                        accessibilityLabel={img.alt || 'Article image'}
+                        resizeMethod="resize"
+                        accessibilityLabel={img.alt || t('reader.articleImageAlt')}
                       />
                       {img.caption ? (
                         <Text style={[styles.imageCaption, { color: theme.colors.textSecondary }]}>{img.caption}</Text>
@@ -1593,10 +1941,17 @@ function ArticleReaderScreenContent({ route, navigation }) {
                   ))}
                   <View
                     onLayout={(e) => { paragraphYRef.current[index] = e.nativeEvent.layout.y; }}
-                    style={isHighlighted ? [styles.ttsHighlight, { backgroundColor: theme.colors.primary + '18' }] : null}
+                    style={
+                      isHighlighted
+                        ? [styles.ttsHighlight, { backgroundColor: theme.colors.primary + '18' }]
+                        : (highlights.includes(index)
+                          ? [styles.ttsHighlight, { backgroundColor: theme.colors.warning + '2E' }]
+                          : null)
+                    }
                   >
                     <Text
-                      selectable={true}
+                      selectable={!highlightMode}
+                      onPress={highlightMode && isSaved ? () => toggleHighlight(index) : undefined}
                       style={[
                         styles.articleText,
                         { writingDirection: isRTL ? 'rtl' : 'ltr', textAlign: isRTL ? 'right' : 'left' },
@@ -1615,9 +1970,9 @@ function ArticleReaderScreenContent({ route, navigation }) {
         {!loading && !error && (!fullContent || fullContent.length === 0) && (
           <View style={styles.noContentContainer}>
             <Ionicons name="document-text-outline" size={48} color="#666" />
-            <Text style={styles.noContentTitle}>No content available</Text>
+            <Text style={styles.noContentTitle}>{t('reader.noContentTitle')}</Text>
             <Text style={styles.noContentText}>
-              This article may not have full content available for reader mode.
+              {t('reader.noContentMessage')}
             </Text>
           </View>
         )}
@@ -1664,9 +2019,9 @@ function ArticleReaderScreenContent({ route, navigation }) {
       )}
 
       {isSpeaking && (
-        <View style={[styles.ttsFloatingBar, { backgroundColor: theme.colors.primary }]}>
+        <View style={[styles.ttsFloatingBar, { backgroundColor: theme.colors.primary, flexDirection: appRTL ? 'row-reverse' : 'row' }]}>
           <Ionicons name="volume-high" size={18} color="#fff" />
-          <Text style={styles.ttsFloatingBarText}>Reading aloud...</Text>
+          <Text style={styles.ttsFloatingBarText}>{t('reader.readingAloud')}</Text>
           <TouchableOpacity onPress={handleStopSpeech} style={styles.ttsStopButton}>
             <Ionicons name="stop-circle" size={28} color="#fff" />
           </TouchableOpacity>
@@ -1679,12 +2034,12 @@ function ArticleReaderScreenContent({ route, navigation }) {
         pointerEvents="none"
         style={[
           styles.bookmarkToast,
-          { opacity: bookmarkFlashAnim },
+          { opacity: bookmarkFlashAnim, flexDirection: appRTL ? 'row-reverse' : 'row' },
         ]}
       >
         <Ionicons name="bookmark" size={16} color="#fff" />
         <Text style={styles.bookmarkToastText}>
-          {hasBookmark ? 'Bookmark saved' : 'Scrolled to bookmark'}
+          {hasBookmark ? t('reader.bookmarkSaved') : t('reader.scrolledToBookmark')}
         </Text>
       </Animated.View>
 
@@ -1700,8 +2055,8 @@ function ArticleReaderScreenContent({ route, navigation }) {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Translate To</Text>
+            <View style={[styles.modalHeader, { flexDirection: appRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={styles.modalTitle}>{t('reader.translateTo')}</Text>
               <TouchableOpacity
                 onPress={() => {
                   setShowLanguagePicker(false);
@@ -1713,11 +2068,11 @@ function ArticleReaderScreenContent({ route, navigation }) {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalSearchContainer}>
+            <View style={[styles.modalSearchContainer, { flexDirection: appRTL ? 'row-reverse' : 'row' }]}>
               <Ionicons name="search" size={18} color={theme.colors.textSecondary} />
               <TextInput
-                style={styles.modalSearchInput}
-                placeholder="Search languages..."
+                style={[styles.modalSearchInput, { textAlign: appRTL ? 'right' : 'left' }]}
+                placeholder={t('reader.searchLanguages')}
                 placeholderTextColor={theme.colors.textTertiary}
                 value={languageSearchQuery}
                 onChangeText={setLanguageSearchQuery}
@@ -1738,6 +2093,7 @@ function ArticleReaderScreenContent({ route, navigation }) {
                 <TouchableOpacity
                   style={[
                     styles.languageItem,
+                    { flexDirection: appRTL ? 'row-reverse' : 'row' },
                     item.code === targetLangCode && styles.languageItemSelected,
                   ]}
                   onPress={() => handleChangeTargetLanguage(item.code)}
@@ -1784,9 +2140,9 @@ function ArticleReaderScreenContent({ route, navigation }) {
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
           <View style={[styles.notesModalContainer, { backgroundColor: theme.colors.surface }]}>
-            <View style={[styles.notesModalHeader, { borderBottomColor: theme.colors.border }]}>
-              <Text style={[styles.notesModalTitle, { color: theme.colors.text }]}>Notes</Text>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={[styles.notesModalHeader, { borderBottomColor: theme.colors.border, flexDirection: appRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={[styles.notesModalTitle, { color: theme.colors.text }]}>{t('reader.notesTitle')}</Text>
+              <View style={{ flexDirection: appRTL ? 'row-reverse' : 'row', gap: 8 }}>
                 {noteText.trim() !== '' && (
                   <TouchableOpacity
                     onPress={() => {
@@ -1808,9 +2164,9 @@ function ArticleReaderScreenContent({ route, navigation }) {
               </View>
             </View>
             <TextInput
-              style={[styles.notesInput, { color: theme.colors.text, borderColor: theme.colors.border, backgroundColor: theme.colors.background }]}
+              style={[styles.notesInput, { color: theme.colors.text, borderColor: theme.colors.border, backgroundColor: theme.colors.background, textAlign: appRTL ? 'right' : 'left' }]}
               multiline
-              placeholder="Write your notes about this article..."
+              placeholder={t('reader.notesPlaceholder')}
               placeholderTextColor={theme.colors.textTertiary}
               value={noteText}
               onChangeText={setNoteText}
@@ -1824,7 +2180,7 @@ function ArticleReaderScreenContent({ route, navigation }) {
                 setShowNotesModal(false);
               }}
             >
-              <Text style={styles.notesSaveButtonText}>Save Note</Text>
+              <Text style={styles.notesSaveButtonText}>{t('reader.saveNote')}</Text>
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
@@ -1848,11 +2204,12 @@ function ArticleReaderScreenContent({ route, navigation }) {
                 key={action.id}
                 style={[
                   styles.overflowItem,
+                  { flexDirection: appRTL ? 'row-reverse' : 'row' },
                   index === overflowActions.length - 1 && { borderBottomWidth: 0 },
                 ]}
               >
                 <TouchableOpacity
-                  style={styles.overflowItemContent}
+                  style={[styles.overflowItemContent, { flexDirection: appRTL ? 'row-reverse' : 'row' }]}
                   onPress={() => { setShowOverflowMenu(false); action.onPress(); }}
                   disabled={action.disabled}
                 >
@@ -1879,16 +2236,17 @@ function ArticleReaderScreenContent({ route, navigation }) {
             {pinnedActions.length > 0 && (
               <>
                 <View style={[styles.overflowDivider, { backgroundColor: theme.colors.border }]} />
-                <Text style={[styles.overflowSectionLabel, { color: theme.colors.textSecondary }]}>Pinned to header (tap to unpin)</Text>
+                <Text style={[styles.overflowSectionLabel, { color: theme.colors.textSecondary, textAlign: appRTL ? 'right' : 'left' }]}>{t('reader.pinnedToHeader')}</Text>
                 {pinnedActions.map((action, index) => (
                   <View
                     key={action.id}
                     style={[
                       styles.overflowItem,
+                      { flexDirection: appRTL ? 'row-reverse' : 'row' },
                       index === pinnedActions.length - 1 && { borderBottomWidth: 0 },
                     ]}
                   >
-                    <View style={styles.overflowItemContent}>
+                    <View style={[styles.overflowItemContent, { flexDirection: appRTL ? 'row-reverse' : 'row' }]}>
                       <Ionicons name={action.icon} size={22} color={action.color} />
                       <Text numberOfLines={1} style={[styles.overflowItemText, { color: theme.colors.textSecondary }]}>{action.label}</Text>
                     </View>

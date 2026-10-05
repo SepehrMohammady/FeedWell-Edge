@@ -39,7 +39,7 @@ export const AVAILABLE_LANGUAGES = [
   { code: 'eo', mlKitName: 'Esperanto', displayName: 'Esperanto' },
   { code: 'es', mlKitName: 'Spanish', displayName: 'Espa\u00F1ol (Spanish)' },
   { code: 'et', mlKitName: 'Estonian', displayName: 'Eesti (Estonian)' },
-  { code: 'fa', mlKitName: 'Persian', displayName: '\u0641\u0627\u0631\u0633\u06CC (Persian)' },
+  { code: 'fa', mlKitName: 'Persian', displayName: '\u0641\u0627\u0631\u0633\u06CC (Farsi)' },
   { code: 'fi', mlKitName: 'Finnish', displayName: 'Suomi (Finnish)' },
   { code: 'fr', mlKitName: 'French', displayName: 'Fran\u00E7ais (French)' },
   { code: 'ga', mlKitName: 'Irish', displayName: 'Gaeilge (Irish)' },
@@ -95,6 +95,23 @@ AVAILABLE_LANGUAGES.forEach(lang => {
   MLKIT_TO_CODE[lang.mlKitName.toLowerCase()] = lang.code;
 });
 
+// Google's detector and Android's locale both still use a few pre-ISO-639
+// codes ('iw' for Hebrew, 'in' for Indonesian), and Google also returns
+// region-tagged codes like 'zh-CN'. Map them onto the codes this table uses,
+// or the same-language check compares 'iw' with 'he' and never matches.
+const LEGACY_LANGUAGE_CODES = { iw: 'he', in: 'id', ji: 'yi', jw: 'jv' };
+
+export function normalizeLanguageCode(code) {
+  if (!code) return code;
+  const raw = String(code).trim();
+  if (CODE_TO_MLKIT[raw]) return raw;
+  const [base, ...region] = raw.split(/[-_]/);
+  const lang = LEGACY_LANGUAGE_CODES[base.toLowerCase()] || base.toLowerCase();
+  const withRegion = region.length ? lang + '-' + region.join('-') : lang;
+  if (CODE_TO_MLKIT[withRegion]) return withRegion;
+  return lang;
+}
+
 export function getMLKitName(langCode) {
   return CODE_TO_MLKIT[langCode] || 'English';
 }
@@ -139,9 +156,22 @@ async function translateOnline(text, sourceLang, targetLang, onProgress) {
   return translatedParagraphs.join('\n\n');
 }
 
+// Hard timeout for online requests so translation never stalls on a dead or
+// absent network (fetch without a timeout can hang for minutes on some devices).
+const ONLINE_TIMEOUT_MS = 12000;
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ONLINE_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function googleTranslateRequest(text, sourceLang, targetLang) {
   const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=' + sourceLang + '&tl=' + targetLang + '&dt=t&q=' + encodeURIComponent(text);
-  const response = await fetch(url, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0' } });
+  const response = await fetchWithTimeout(url, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (!response.ok) throw new Error('Google Translate returned ' + response.status);
   const data = await response.json();
   if (!data || !data[0]) throw new Error('Unexpected response from Google Translate');
@@ -155,13 +185,33 @@ async function googleTranslateRequest(text, sourceLang, targetLang) {
 async function detectLanguageOnline(text) {
   const sample = text.substring(0, 300);
   const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=' + encodeURIComponent(sample);
-  const response = await fetch(url, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0' } });
+  const response = await fetchWithTimeout(url, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (!response.ok) throw new Error('Language detection failed');
   const data = await response.json();
   return data[2] || 'en';
 }
 
 // --- ML Kit (Offline) ---
+
+// Translate one chunk, self-repairing if ML Kit reports missing model files
+// (can happen when the OS evicts models while they are still marked downloaded).
+// The repair (re-download + retry) runs AT MOST ONCE per translation and only
+// for missing-model errors — otherwise, with no internet, every chunk would
+// block on a doomed download attempt and the translation would appear to hang.
+async function mlKitTranslateWithRepair(text, sourceMlKit, targetMlKit, repairState) {
+  try {
+    await FastTranslator.prepare({ source: sourceMlKit, target: targetMlKit, downloadIfNeeded: false });
+    return await FastTranslator.translate(text);
+  } catch (error) {
+    const msg = String(error?.message || '');
+    const missingModel = /model/i.test(msg);
+    if (!repairState || repairState.attempted || !missingModel) throw error;
+    repairState.attempted = true;
+    console.warn('Offline translate failed, re-downloading model and retrying once:', msg);
+    await FastTranslator.prepare({ source: sourceMlKit, target: targetMlKit, downloadIfNeeded: true });
+    return await FastTranslator.translate(text);
+  }
+}
 
 async function translateOffline(text, sourceLang, targetLang, onProgress) {
   if (!text || text.trim().length === 0) return text;
@@ -170,10 +220,11 @@ async function translateOffline(text, sourceLang, targetLang, onProgress) {
   if (sourceMlKit === targetMlKit) return text;
   if (onProgress) onProgress('Preparing offline models...');
   await FastTranslator.prepare({ source: sourceMlKit, target: targetMlKit, downloadIfNeeded: true });
+  const repairState = { attempted: false };
   const MAX_CHUNK = 4000;
   if (text.length <= MAX_CHUNK) {
     if (onProgress) onProgress('Translating offline...');
-    return await FastTranslator.translate(text);
+    return await mlKitTranslateWithRepair(text, sourceMlKit, targetMlKit, repairState);
   }
   const paragraphs = text.split(/\n\n+/);
   const translatedParagraphs = [];
@@ -187,19 +238,16 @@ async function translateOffline(text, sourceLang, targetLang, onProgress) {
       const results = [];
       for (const sentence of sentences) {
         if ((batch + ' ' + sentence).length > MAX_CHUNK && batch.length > 0) {
-          await FastTranslator.prepare({ source: sourceMlKit, target: targetMlKit, downloadIfNeeded: false });
-          results.push(await FastTranslator.translate(batch));
+          results.push(await mlKitTranslateWithRepair(batch, sourceMlKit, targetMlKit, repairState));
           batch = sentence;
         } else { batch += (batch ? ' ' : '') + sentence; }
       }
       if (batch.length > 0) {
-        await FastTranslator.prepare({ source: sourceMlKit, target: targetMlKit, downloadIfNeeded: false });
-        results.push(await FastTranslator.translate(batch));
+        results.push(await mlKitTranslateWithRepair(batch, sourceMlKit, targetMlKit, repairState));
       }
       translatedParagraphs.push(results.join(' '));
     } else {
-      await FastTranslator.prepare({ source: sourceMlKit, target: targetMlKit, downloadIfNeeded: false });
-      translatedParagraphs.push(await FastTranslator.translate(paragraph));
+      translatedParagraphs.push(await mlKitTranslateWithRepair(paragraph, sourceMlKit, targetMlKit, repairState));
     }
   }
   return translatedParagraphs.join('\n\n');
@@ -237,20 +285,31 @@ export async function translateText(text, sourceLangCode, targetLangCode, onProg
     const result = await translateOffline(text, sourceLangCode, targetLangCode, onProgress);
     return { text: result, method: 'offline' };
   } catch (offlineError) {
-    throw new Error('Translation failed: ' + offlineError.message);
+    // Last resort: the online failure may have been a transient flake — try once more.
+    try {
+      if (onProgress) onProgress('Retrying online...');
+      const result = await translateOnline(text, sourceLangCode, targetLangCode, onProgress);
+      return { text: result, method: 'online' };
+    } catch (finalError) {
+      throw new Error('Translation failed: ' + offlineError.message);
+    }
   }
 }
 
 // --- Language Detection ---
 
-export async function identifyLanguage(text) {
+// In Offline mode detection stays on the device (ML Kit); otherwise Google's
+// detector is tried first because it is more accurate on short samples.
+export async function identifyLanguage(text, mode = TRANSLATION_MODES.AUTO) {
   if (!text || text.length < 20) return null;
-  try {
-    const langCode = await detectLanguageOnline(text);
-    console.log('Online language detection:', langCode);
-    return langCode;
-  } catch (error) {
-    console.log('Online language detection failed:', error.message);
+  if (mode !== TRANSLATION_MODES.OFFLINE) {
+    try {
+      const langCode = normalizeLanguageCode(await detectLanguageOnline(text));
+      console.log('Online language detection:', langCode);
+      return langCode;
+    } catch (error) {
+      console.log('Online language detection failed:', error.message);
+    }
   }
   try {
     const sample = text.substring(0, 500);
@@ -323,7 +382,7 @@ export async function loadTargetLanguage() {
       const locale = Platform.OS === 'ios'
         ? (NativeModules.SettingsManager?.settings?.AppleLocale || NativeModules.SettingsManager?.settings?.AppleLanguages?.[0] || 'en')
         : NativeModules.I18nManager?.localeIdentifier || 'en';
-      deviceLang = locale.split(/[-_]/)[0].toLowerCase();
+      deviceLang = normalizeLanguageCode(locale.split(/[-_]/)[0].toLowerCase());
     } catch (e) { /* ignore */ }
     // Only use if it's a supported language
     return CODE_TO_MLKIT[deviceLang] ? deviceLang : 'en';

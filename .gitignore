@@ -29,6 +29,7 @@ android/build/
 android/.gradle/
 android/.kotlin/
 android/local.properties
+android/keystore.properties
 
 # Debug and log files
 *.log
@@ -53,3 +54,6 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+
+# Play Console files (store listing CSV, release notes), kept locally only
+store/

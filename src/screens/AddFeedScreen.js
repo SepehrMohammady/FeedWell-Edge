@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,116 +16,70 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFeed } from '../context/FeedContext';
 import { useTheme } from '../context/ThemeContext';
-import { parseRSSFeed, isValidRSSUrl } from '../utils/rssParser';
+import { parseRSSFeed, isValidRSSUrl, discoverFeedUrl } from '../utils/rssParser';
 import { parseRSSFeedWithProxy } from '../utils/corsRssParser';
 import { useAppSettings } from '../context/AppSettingsContext';
+import { useTranslation } from '../context/LanguageContext';
+import { FEED_REGIONS, getCuratedFeeds, CURATED_FEEDS } from '../data/curatedFeeds';
+import { formatLocalizedDate } from '../utils/formatDate';
 import CustomAlert from '../components/CustomAlert';
+import { useTourTarget } from '../context/TourContext';
 
 export default function AddFeedScreen({ navigation }) {
+  // The tour scrolls each target into view before spotlighting it.
+  const scrollRef = useRef(null);
+  const inputYRef = useRef(0);
+  const categoriesYRef = useRef(0);
+  // The URL box sits below the user's feed list, so with many feeds it starts
+  // off screen: scroll it into view before the tour spotlights it.
+  const tourUrlRef = useTourTarget('addFeed.url', () =>
+    scrollRef.current?.scrollTo({ y: Math.max(0, inputYRef.current - 12), animated: false }));
+  const tourRegionRef = useTourTarget('addFeed.popular', () =>
+    scrollRef.current?.scrollTo({ y: Math.max(0, categoriesYRef.current - 12), animated: false }));
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
-  const { addFeed, addArticles, feeds, removeFeed } = useFeed();
+  const [discovering, setDiscovering] = useState(false);
+  const { addFeed, addArticles, feeds, removeFeed, toggleFeedPriority, toggleFeedHidden } = useFeed();
   const { theme } = useTheme();
-  const { maxArticleAge } = useAppSettings();
+  const { maxArticleAge, feedRegion, feedRegionUserSet, updateFeedRegion } = useAppSettings();
+  const { t, language, isRTL, formatNumber } = useTranslation();
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', buttons: [] });
 
-  const feedCategories = [
-    {
-      title: 'Technology',
-      feeds: [
-        { name: 'TechCrunch', url: 'https://techcrunch.com/feed/' },
-        { name: 'The Verge', url: 'https://www.theverge.com/rss/index.xml' },
-        { name: 'Wired', url: 'https://www.wired.com/feed/rss' },
-        { name: 'Engadget', url: 'https://www.engadget.com/rss.xml' },
-        { name: 'Hacker News', url: 'https://hnrss.org/frontpage' },
-      ]
-    },
-    {
-      title: 'News',
-      feeds: [
-        { name: 'BBC News', url: 'https://feeds.bbci.co.uk/news/rss.xml' },
-        { name: 'NPR News', url: 'https://feeds.npr.org/1001/rss.xml' },
-        { name: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
-        { name: 'The Guardian', url: 'https://www.theguardian.com/world/rss' },
-        { name: 'CNN News', url: 'https://rss.cnn.com/rss/edition.rss' },
-      ]
-    },
-    {
-      title: 'Sports',
-      feeds: [
-        { name: 'ESPN', url: 'https://www.espn.com/espn/rss/news' },
-        { name: 'BBC Sport', url: 'https://feeds.bbci.co.uk/sport/rss.xml' },
-        { name: 'Yahoo Sports', url: 'https://sports.yahoo.com/rss/' },
-        { name: 'Sky Sports', url: 'https://www.skysports.com/rss/12040' },
-        { name: 'CBS Sports', url: 'https://www.cbssports.com/rss/headlines/' },
-      ]
-    },
-    {
-      title: 'Entertainment',
-      feeds: [
-        { name: 'Variety', url: 'https://variety.com/feed/' },
-        { name: 'Hollywood Reporter', url: 'https://www.hollywoodreporter.com/feed/' },
-        { name: 'Rolling Stone', url: 'https://www.rollingstone.com/feed/' },
-        { name: 'Deadline', url: 'https://deadline.com/feed/' },
-        { name: 'Pitchfork', url: 'https://pitchfork.com/feed/feed-news/rss' },
-      ]
-    },
-    {
-      title: 'Gaming',
-      feeds: [
-        { name: 'IGN', url: 'https://feeds.ign.com/ign/all' },
-        { name: 'Kotaku', url: 'https://kotaku.com/rss' },
-        { name: 'GameSpot', url: 'https://www.gamespot.com/feeds/mashup/' },
-        { name: 'Polygon', url: 'https://www.polygon.com/rss/index.xml' },
-        { name: 'PC Gamer', url: 'https://www.pcgamer.com/rss/' },
-      ]
-    },
-    {
-      title: 'Business',
-      feeds: [
-        { name: 'CNBC', url: 'https://www.cnbc.com/id/100003114/device/rss/rss.html' },
-        { name: 'Bloomberg', url: 'https://feeds.bloomberg.com/markets/news.rss' },
-        { name: 'MarketWatch', url: 'https://feeds.marketwatch.com/marketwatch/topstories/' },
-        { name: 'Financial Times', url: 'https://www.ft.com/rss/home' },
-        { name: 'The Economist', url: 'https://www.economist.com/international/rss.xml' },
-      ]
-    },
-    {
-      title: 'Science',
-      feeds: [
-        { name: 'Science Daily', url: 'https://www.sciencedaily.com/rss/all.xml' },
-        { name: 'NASA', url: 'https://www.nasa.gov/rss/dyn/breaking_news.rss' },
-        { name: 'Nature', url: 'https://www.nature.com/nature.rss' },
-        { name: 'New Scientist', url: 'https://www.newscientist.com/feed/home/' },
-        { name: 'Phys.org', url: 'https://phys.org/rss-feed/' },
-      ]
-    },
-    {
-      title: 'Lifestyle',
-      feeds: [
-        { name: 'Lifehacker', url: 'https://lifehacker.com/rss' },
-        { name: 'Mashable', url: 'https://mashable.com/feeds/rss/all' },
-        { name: 'BuzzFeed', url: 'https://www.buzzfeed.com/index.xml' },
-        { name: 'The Guardian Culture', url: 'https://www.theguardian.com/culture/rss' },
-        { name: 'Smashing Magazine', url: 'https://www.smashingmagazine.com/feed/' },
-      ]
-    }
-  ];
+  // Effective feed region: an explicit user choice wins; otherwise follow the app
+  // language (English -> 'global'), falling back to 'global' if no curated set exists.
+  const effectiveRegion = feedRegionUserSet
+    ? feedRegion
+    : (language === 'en'
+      ? 'global'
+      : (CURATED_FEEDS[language] && CURATED_FEEDS[language].length > 0 ? language : 'global'));
+  const [selectedRegion, setSelectedRegion] = useState(effectiveRegion);
+  const [showRegionPicker, setShowRegionPicker] = useState(false);
+  useEffect(() => { setSelectedRegion(effectiveRegion); }, [effectiveRegion]);
+
+  const handleSelectRegion = (code) => {
+    setSelectedRegion(code);
+    updateFeedRegion(code); // explicit choice — stops auto-following the app language
+  };
+
+  const feedCategories = getCuratedFeeds(selectedRegion).map((c) => ({
+    title: t('category.' + c.categoryKey),
+    feeds: c.feeds,
+  }));
 
   const handleAddFeed = async () => {
     if (!url.trim()) {
-      setAlertConfig({ visible: true, title: 'Error', message: 'Please enter a feed URL', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('common.error'), message: t('addFeed.enterUrl'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
       return;
     }
 
     if (!isValidRSSUrl(url.trim())) {
-      setAlertConfig({ visible: true, title: 'Error', message: 'Please enter a valid HTTP or HTTPS URL', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('common.error'), message: t('addFeed.enterValidUrl'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
       return;
     }
 
     // Check if feed already exists
     if (feeds.some(feed => feed.url === url.trim())) {
-      setAlertConfig({ visible: true, title: 'Error', message: 'This feed has already been added', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('common.error'), message: t('addFeed.alreadyAdded'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
       return;
     }
 
@@ -133,18 +87,37 @@ export default function AddFeedScreen({ navigation }) {
     try {
       console.log('Attempting to parse feed:', url.trim());
       
+      let feedUrl = url.trim();
       let feedData;
-      
+
       // Try the regular parser first
       try {
-        feedData = await parseRSSFeed(url.trim(), maxArticleAge);
+        feedData = await parseRSSFeed(feedUrl, maxArticleAge);
       } catch (error) {
         console.log('Regular parser failed, trying CORS proxy:', error.message);
         try {
-          feedData = await parseRSSFeedWithProxy(url.trim());
+          feedData = await parseRSSFeedWithProxy(feedUrl);
         } catch (proxyError) {
-          console.log('CORS proxy also failed:', proxyError.message);
-          throw new Error('Unable to access this feed. Please check the URL or try a different feed.');
+          console.log('CORS proxy also failed, trying discovery:', proxyError.message);
+          // The user most likely pasted a website address rather than a feed
+          // address — look up the site's feed the way a browser would.
+          let discovered = null;
+          setDiscovering(true);
+          try {
+            discovered = await discoverFeedUrl(feedUrl);
+          } finally {
+            setDiscovering(false);
+          }
+          if (!discovered) {
+            throw new Error('Unable to access this feed. Please check the URL or try a different feed.');
+          }
+          if (feeds.some(feed => feed.url === discovered)) {
+            setAlertConfig({ visible: true, title: t('common.error'), message: t('addFeed.alreadyAdded'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
+            return;
+          }
+          console.log('Discovered feed for site:', feedUrl, '->', discovered);
+          feedUrl = discovered;
+          feedData = await parseRSSFeed(feedUrl, maxArticleAge);
         }
       }
       
@@ -154,10 +127,10 @@ export default function AddFeedScreen({ navigation }) {
       });
       
       if (!feedData.articles || feedData.articles.length === 0) {
-        setAlertConfig({ visible: true, title: 'Warning', message: 'This feed appears to be empty or invalid, but will be added anyway.', icon: 'warning-outline', buttons: [{ text: 'OK' }] });
+        setAlertConfig({ visible: true, title: t('addFeed.warning'), message: t('addFeed.emptyFeedWarning'), icon: 'warning-outline', buttons: [{ text: t('common.ok') }] });
       }
 
-      await addFeed(url.trim(), feedData.title);
+      await addFeed(feedUrl, feedData.title);
       
       if (feedData.articles && feedData.articles.length > 0) {
         await addArticles(feedData.articles);
@@ -165,11 +138,11 @@ export default function AddFeedScreen({ navigation }) {
 
       setAlertConfig({
         visible: true,
-        title: 'Success',
-        message: `Added "${feedData.title}" with ${feedData.articles?.length || 0} articles`,
+        title: t('common.success'),
+        message: t('addFeed.addedWithArticles', { title: feedData.title, count: formatNumber(feedData.articles?.length || 0) }),
         icon: 'checkmark-circle-outline',
-        buttons: [{ 
-          text: 'OK', 
+        buttons: [{
+          text: t('common.ok'),
           onPress: () => {
             navigation.reset({
               index: 0,
@@ -182,21 +155,21 @@ export default function AddFeedScreen({ navigation }) {
       console.error('Error adding feed:', error);
       
       // More detailed error message
-      let errorMessage = 'Failed to add feed. ';
-      
+      let errorMessage = t('addFeed.failedToAdd') + ' ';
+
       if (error.message.includes('CORS') || error.message.includes('accessible')) {
-        errorMessage += 'This feed could not be loaded. It may be temporarily unavailable — please try again. ';
+        errorMessage += t('addFeed.errorTemporarilyUnavailable') + ' ';
       } else if (error.message.includes('Network')) {
-        errorMessage += 'Please check the feed URL and your internet connection. ';
+        errorMessage += t('addFeed.errorCheckConnection') + ' ';
       } else if (error.message.includes('Failed to fetch')) {
-        errorMessage += 'The feed URL may be invalid or temporarily unavailable. ';
+        errorMessage += t('addFeed.errorInvalidOrUnavailable') + ' ';
       } else if (error.message.includes('Unable to access')) {
-        errorMessage += error.message.replace('Error: ', '');
+        errorMessage += t('addFeed.unableToAccess');
       } else {
-        errorMessage += 'Please verify the feed URL is correct and accessible.';
+        errorMessage += t('addFeed.errorVerifyUrl');
       }
-      
-      setAlertConfig({ visible: true, title: 'Error', message: errorMessage, icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+
+      setAlertConfig({ visible: true, title: t('common.error'), message: errorMessage, icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
     } finally {
       setLoading(false);
     }
@@ -205,20 +178,20 @@ export default function AddFeedScreen({ navigation }) {
   const handleDirectAddFeed = async (feed) => {
     // Check if feed already exists
     if (feeds.some(existingFeed => existingFeed.url === feed.url)) {
-      setAlertConfig({ visible: true, title: 'Already Added', message: `"${feed.name}" is already in your feeds`, icon: 'information-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('addFeed.alreadyAddedTitle'), message: t('addFeed.feedAlreadyInFeeds', { name: feed.name }), icon: 'information-circle-outline', buttons: [{ text: t('common.ok') }] });
       return;
     }
 
     // Show confirmation popup
     setAlertConfig({
       visible: true,
-      title: 'Add Feed',
-      message: `Add "${feed.name}" to your feeds?`,
+      title: t('addFeed.addButton'),
+      message: t('addFeed.confirmAddFeed', { name: feed.name }),
       icon: 'add-circle-outline',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Add',
+          text: t('common.add'),
           onPress: async () => {
             setLoading(true);
             try {
@@ -250,10 +223,12 @@ export default function AddFeedScreen({ navigation }) {
 
                 setAlertConfig({
                   visible: true,
-                  title: 'Success',
-                  message: `"${feed.name}" has been added successfully!${feedData.articles?.length > 0 ? ` Found ${feedData.articles.length} articles.` : ''}`,
+                  title: t('common.success'),
+                  message: feedData.articles?.length > 0
+                    ? t('addFeed.feedAddedWithCount', { name: feed.name, count: formatNumber(feedData.articles.length) })
+                    : t('addFeed.feedAdded', { name: feed.name }),
                   icon: 'checkmark-circle-outline',
-                  buttons: [{ text: 'OK' }],
+                  buttons: [{ text: t('common.ok') }],
                 });
               } else {
                 throw new Error('Unable to load feed content. Please check the feed URL and try again.');
@@ -266,37 +241,37 @@ export default function AddFeedScreen({ navigation }) {
                 stack: error.stack
               });
 
-              let errorMessage = `Failed to add "${feed.name}". `;
+              let errorMessage = t('addFeed.failedToAddNamed', { name: feed.name }) + ' ';
 
               // More specific error handling
               if (error.message.includes('Network request failed') || error.message.includes('fetch')) {
-                errorMessage += 'Network connection error. Please check your internet connection and try again.';
+                errorMessage += t('addFeed.errorNetworkConnection');
               } else if (error.message.includes('CORS') || error.message.includes('accessible')) {
-                errorMessage += 'This feed could not be loaded. It may be temporarily unavailable — please try again.';
+                errorMessage += t('addFeed.errorTemporarilyUnavailable');
               } else if (error.message.includes('404') || error.message.includes('Not found')) {
-                errorMessage += 'The feed URL is not accessible (404 error).';
+                errorMessage += t('addFeed.errorNotAccessible404');
               } else if (error.message.includes('Invalid') || error.message.includes('parse')) {
-                errorMessage += 'The feed format is invalid or unsupported.';
+                errorMessage += t('addFeed.errorInvalidFormat');
               } else if (error.message.includes('timeout')) {
-                errorMessage += 'Request timed out. The feed server may be slow or unavailable.';
+                errorMessage += t('addFeed.errorTimedOut');
               } else if (error.message.includes('Unable to access')) {
-                errorMessage += error.message.replace('Error: ', '');
+                errorMessage += t('addFeed.unableToAccess');
               } else {
-                errorMessage += 'Please verify the feed URL is correct and try again.';
+                errorMessage += t('addFeed.errorVerifyUrlTryAgain');
               }
 
               // Add troubleshooting tip
-              errorMessage += '\n\nTip: You can try adding the feed manually using the URL input above.';
+              errorMessage += '\n\n' + t('addFeed.manualAddTip');
 
               setAlertConfig({
                 visible: true,
-                title: 'Error',
+                title: t('common.error'),
                 message: errorMessage,
                 icon: 'alert-circle-outline',
                 buttons: [
-                  { text: 'Cancel', style: 'cancel' },
+                  { text: t('common.cancel'), style: 'cancel' },
                   {
-                    text: 'Try Manual Add',
+                    text: t('addFeed.tryManualAdd'),
                     onPress: () => {
                       setUrl(feed.url);
                       console.log('Populated URL field for manual add:', feed.url);
@@ -322,7 +297,7 @@ export default function AddFeedScreen({ navigation }) {
     
     // For web platform, use window.confirm for better compatibility
     if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
-      const confirmed = window.confirm(`Remove "${feed.title}"?\n\nThis will remove the feed and all its articles.`);
+      const confirmed = window.confirm(t('addFeed.removeConfirmWeb', { title: feed.title }));
       if (confirmed) {
         performRemoveFeed(feed);
       }
@@ -332,11 +307,11 @@ export default function AddFeedScreen({ navigation }) {
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
         {
-          options: ['Cancel', 'Remove Feed'],
+          options: [t('common.cancel'), t('addFeed.removeFeed')],
           destructiveButtonIndex: 1,
           cancelButtonIndex: 0,
-          title: `Remove "${feed.title}"?`,
-          message: 'This will remove the feed and all its articles.',
+          title: t('addFeed.removeConfirmTitle', { title: feed.title }),
+          message: t('addFeed.removeConfirmMessage'),
         },
         async (buttonIndex) => {
           if (buttonIndex === 1) {
@@ -347,13 +322,13 @@ export default function AddFeedScreen({ navigation }) {
     } else {
       setAlertConfig({
         visible: true,
-        title: 'Remove Feed',
-        message: `Remove "${feed.title}"? This will remove the feed and all its articles.`,
+        title: t('addFeed.removeFeed'),
+        message: t('addFeed.removeConfirmMessageNamed', { title: feed.title }),
         icon: 'trash-outline',
         buttons: [
-          { text: 'Cancel', style: 'cancel' },
+          { text: t('common.cancel'), style: 'cancel' },
           {
-            text: 'Remove',
+            text: t('common.remove'),
             style: 'destructive',
             onPress: () => performRemoveFeed(feed),
           },
@@ -375,23 +350,24 @@ export default function AddFeedScreen({ navigation }) {
         // Don't show success alert on web to avoid too many popups
         console.log('Feed removed successfully');
       } else {
-        setAlertConfig({ visible: true, title: 'Success', message: `Removed "${feed.title}"`, icon: 'checkmark-circle-outline', buttons: [{ text: 'OK' }] });
+        setAlertConfig({ visible: true, title: t('common.success'), message: t('addFeed.removedFeed', { title: feed.title }), icon: 'checkmark-circle-outline', buttons: [{ text: t('common.ok') }] });
       }
     } catch (error) {
       console.error('Error removing feed:', error);
-      
+
       if (Platform.OS === 'web') {
-        window.alert('Failed to remove feed. Please try again.');
+        window.alert(t('addFeed.failedToRemove'));
       } else {
-        setAlertConfig({ visible: true, title: 'Error', message: 'Failed to remove feed. Please try again.', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+        setAlertConfig({ visible: true, title: t('common.error'), message: t('addFeed.failedToRemove'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
       }
     }
   };
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString();
-  };
+  const formatDate = (dateString) => formatLocalizedDate(dateString, language, formatNumber, {
+    withYear: true,
+    withTime: false,
+    locale: language,
+  });
 
   const SectionHeader = ({ title }) => (
     <Text style={styles.sectionHeader}>{title}</Text>
@@ -583,6 +559,10 @@ export default function AddFeedScreen({ navigation }) {
       padding: 8,
       marginLeft: 8,
     },
+    priorityButton: {
+      padding: 8,
+      marginLeft: 4,
+    },
     emptyState: {
       alignItems: 'center',
       justifyContent: 'center',
@@ -637,12 +617,12 @@ export default function AddFeedScreen({ navigation }) {
   });
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={["top", "left", "right"]} style={styles.container}>
       <KeyboardAvoidingView
         style={styles.keyboardContainer}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
-        <View style={styles.header}>
+        <View style={[styles.header, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
           <TouchableOpacity
             style={styles.headerButton}
             onPress={() => navigation.reset({
@@ -652,42 +632,63 @@ export default function AddFeedScreen({ navigation }) {
           >
             <Ionicons name="close" size={24} color={theme.colors.primary} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Add Feed</Text>
+          <Text style={styles.headerTitle}>{t('addFeed.addButton')}</Text>
           <View style={styles.headerButton} />
         </View>
 
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          <SectionHeader title={`Your Feeds (${feeds.length})`} />
+        <ScrollView ref={scrollRef} style={styles.content} showsVerticalScrollIndicator={false}>
+          <SectionHeader title={t('addFeed.yourFeeds', { count: formatNumber(feeds.length) })} />
           {feeds.length === 0 ? (
             <View style={styles.emptyState}>
               <Ionicons name="newspaper-outline" size={48} color="#ccc" />
-              <Text style={styles.emptyText}>No feeds added yet</Text>
-              <Text style={styles.emptySubText}>Add your first feed below to get started</Text>
+              <Text style={styles.emptyText}>{t('addFeed.noFeedsYet')}</Text>
+              <Text style={styles.emptySubText}>{t('addFeed.noFeedsSubtext')}</Text>
             </View>
           ) : (
             <View style={styles.section}>
               {feeds.map((feed, index) => (
                 <View
                   key={feed.id || feed.url || index}
-                  style={styles.feedItem}
+                  style={[styles.feedItem, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}
                 >
                   <View style={styles.feedContent}>
-                    <Text style={styles.feedTitle} numberOfLines={1}>
-                      {feed.title || feed.url || 'Unknown Feed'}
+                    <Text style={[styles.feedTitle, { textAlign: isRTL ? 'right' : 'left' }, feed.isHidden && { opacity: 0.5 }]} numberOfLines={1}>
+                      {feed.title || feed.url || t('addFeed.unknownFeed')}
                     </Text>
-                    <Text style={styles.feedUrl} numberOfLines={1}>
-                      {feed.url || 'No URL'}
+                    <Text style={[styles.feedUrl, { textAlign: isRTL ? 'right' : 'left' }]} numberOfLines={1}>
+                      {feed.url || t('addFeed.noUrl')}
                     </Text>
-                    <Text style={styles.feedDate}>
-                      Added {formatDate(feed.addedAt)}
+                    <Text style={[styles.feedDate, { textAlign: isRTL ? 'right' : 'left' }]}>
+                      {t('addFeed.addedDate', { date: formatDate(feed.addedAt) })}
                     </Text>
                   </View>
+                  <TouchableOpacity
+                    onPress={() => toggleFeedHidden(feed.id)}
+                    style={[styles.priorityButton, isRTL && { marginLeft: 0, marginRight: 4 }]}
+                    accessibilityLabel={feed.isHidden ? t('addFeed.showFeed') : t('addFeed.hideFeed')}
+                  >
+                    <Ionicons
+                      name={feed.isHidden ? 'eye-off-outline' : 'eye-outline'}
+                      size={20}
+                      color={feed.isHidden ? theme.colors.textTertiary : theme.colors.textSecondary}
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => toggleFeedPriority(feed.id)}
+                    style={[styles.priorityButton, isRTL && { marginLeft: 0, marginRight: 4 }]}
+                  >
+                    <Ionicons
+                      name={feed.isPriority ? 'star' : 'star-outline'}
+                      size={20}
+                      color={feed.isPriority ? theme.colors.warning : theme.colors.textSecondary}
+                    />
+                  </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() => {
                       console.log('Trash icon pressed for feed:', feed);
                       handleRemoveFeed(feed);
                     }}
-                    style={styles.trashButton}
+                    style={[styles.trashButton, isRTL && { marginLeft: 0, marginRight: 8 }]}
                   >
                     <Ionicons name="trash-outline" size={20} color={theme.colors.error} />
                   </TouchableOpacity>
@@ -696,13 +697,13 @@ export default function AddFeedScreen({ navigation }) {
             </View>
           )}
 
-          <View style={styles.inputSection}>
-            <Text style={styles.sectionTitle}>RSS Feed URL</Text>
-            <Text style={styles.sectionDescription}>
-              Enter the URL of an RSS or Atom feed you'd like to follow
+          <View style={styles.inputSection} onLayout={(e) => { inputYRef.current = e.nativeEvent.layout.y; }}>
+            <Text style={[styles.sectionTitle, { textAlign: isRTL ? 'right' : 'left' }]}>{t('addFeed.rssFeedUrl')}</Text>
+            <Text style={[styles.sectionDescription, { textAlign: isRTL ? 'right' : 'left' }]}>
+              {t('addFeed.rssFeedUrlDescription')}
             </Text>
             
-            <View style={styles.inputContainer}>
+            <View ref={tourUrlRef} collapsable={false} style={styles.inputContainer}>
               <TextInput
                 style={styles.textInput}
                 value={url}
@@ -724,7 +725,7 @@ export default function AddFeedScreen({ navigation }) {
             </View>
 
             <TouchableOpacity
-              style={[styles.addButton, loading && styles.addButtonDisabled]}
+              style={[styles.addButton, { flexDirection: isRTL ? 'row-reverse' : 'row' }, loading && styles.addButtonDisabled]}
               onPress={handleAddFeed}
               disabled={loading}
             >
@@ -733,22 +734,47 @@ export default function AddFeedScreen({ navigation }) {
               ) : (
                 <>
                   <Ionicons name="add" size={20} color="#fff" />
-                  <Text style={styles.addButtonText}>Add Feed</Text>
+                  <Text style={[styles.addButtonText, isRTL && { marginLeft: 0, marginRight: 8 }]}>{t('addFeed.addButton')}</Text>
                 </>
               )}
             </TouchableOpacity>
           </View>
 
-          <View style={styles.categoriesSection}>
-            <Text style={styles.sectionTitle}>Popular Categories</Text>
-            <Text style={styles.sectionDescription}>
-              Choose from curated feeds in different categories
+          <View style={styles.categoriesSection} onLayout={(e) => { categoriesYRef.current = e.nativeEvent.layout.y; }}>
+            <Text style={[styles.sectionTitle, { textAlign: isRTL ? 'right' : 'left' }]}>{t('addFeed.popularCategories')}</Text>
+            <Text style={[styles.sectionDescription, { textAlign: isRTL ? 'right' : 'left' }]}>
+              {t('addFeed.popularDescription')}
             </Text>
-            
+
+            <Text style={{ color: theme.colors.textSecondary, textAlign: isRTL ? 'right' : 'left', fontSize: 13, fontWeight: '600', marginTop: 12, marginBottom: 8 }}>
+              {t('region.label')}
+            </Text>
+            <TouchableOpacity
+              ref={tourRegionRef}
+              onPress={() => setShowRegionPicker(true)}
+              style={{
+                flexDirection: isRTL ? 'row-reverse' : 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: theme.colors.surface,
+                borderWidth: 1,
+                borderColor: theme.colors.border,
+                borderRadius: 12,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                marginBottom: 14,
+              }}
+            >
+              <Text style={{ color: theme.colors.text, fontSize: 15, fontWeight: '600' }}>
+                {t((FEED_REGIONS.find((r) => r.code === selectedRegion) || FEED_REGIONS[0]).labelKey)}
+              </Text>
+              <Ionicons name="chevron-down" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+
             {feedCategories.map((category, index) => (
               <View key={index} style={styles.categoryContainer}>
-                <Text style={styles.categoryTitle}>{category.title}</Text>
-                <View style={styles.feedGrid}>
+                <Text style={[styles.categoryTitle, { textAlign: isRTL ? 'right' : 'left' }]}>{category.title}</Text>
+                <View style={[styles.feedGrid, isRTL && { flexDirection: 'row-reverse' }]}>
                   {category.feeds.map((feed, feedIndex) => (
                     <TouchableOpacity
                       key={feedIndex}
@@ -765,23 +791,23 @@ export default function AddFeedScreen({ navigation }) {
           </View>
 
           <View style={styles.helpSection}>
-            <Text style={styles.sectionTitle}>How to find RSS feeds</Text>
-            <View style={styles.helpItem}>
+            <Text style={[styles.sectionTitle, { textAlign: isRTL ? 'right' : 'left' }]}>{t('addFeed.howToFind')}</Text>
+            <View style={[styles.helpItem, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
               <Ionicons name="search-outline" size={20} color="#666" />
-              <Text style={styles.helpText}>
-                Look for RSS, XML, or feed links on websites
+              <Text style={[styles.helpText, isRTL && { marginLeft: 0, marginRight: 12, textAlign: 'right' }]}>
+                {t('addFeed.helpLookForLinks')}
               </Text>
             </View>
-            <View style={styles.helpItem}>
+            <View style={[styles.helpItem, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
               <Ionicons name="globe-outline" size={20} color="#666" />
-              <Text style={styles.helpText}>
-                Many news sites have feeds at /feed, /rss, or /feed.xml
+              <Text style={[styles.helpText, isRTL && { marginLeft: 0, marginRight: 12, textAlign: 'right' }]}>
+                {t('addFeed.helpFeedPaths')}
               </Text>
             </View>
-            <View style={styles.helpItem}>
+            <View style={[styles.helpItem, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
               <Ionicons name="shield-checkmark-outline" size={20} color={theme.colors.textSecondary} />
-              <Text style={styles.helpText}>
-                All ads and tracking are automatically removed
+              <Text style={[styles.helpText, isRTL && { marginLeft: 0, marginRight: 12, textAlign: 'right' }]}>
+                {t('addFeed.helpAdsRemoved')}
               </Text>
             </View>
           </View>
@@ -798,10 +824,57 @@ export default function AddFeedScreen({ navigation }) {
         <View style={styles.loadingOverlay}>
           <View style={styles.loadingBox}>
             <ActivityIndicator color={theme.colors.primary} size="large" />
-            <Text style={styles.loadingText}>Adding feed...</Text>
-            <Text style={styles.loadingSubtext}>Fetching and parsing articles</Text>
+            <Text style={styles.loadingText}>{discovering ? t('addFeed.lookingForFeed') : t('addFeed.addingFeed')}</Text>
+            <Text style={styles.loadingSubtext}>{t('addFeed.fetchingArticles')}</Text>
           </View>
         </View>
+      </Modal>
+
+      {/* Feed-region picker (dropdown) */}
+      <Modal
+        visible={showRegionPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowRegionPicker(false)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setShowRegionPicker(false)}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+        >
+          <View style={{ backgroundColor: theme.colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 24, maxHeight: '70%' }}>
+            <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
+              <Text style={{ color: theme.colors.text, fontSize: 17, fontWeight: '700' }}>{t('region.label')}</Text>
+              <TouchableOpacity onPress={() => setShowRegionPicker(false)}>
+                <Ionicons name="close" size={24} color={theme.colors.text} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView>
+              {FEED_REGIONS.map((r) => {
+                const active = selectedRegion === r.code;
+                return (
+                  <TouchableOpacity
+                    key={r.code}
+                    onPress={() => { handleSelectRegion(r.code); setShowRegionPicker(false); }}
+                    style={{
+                      flexDirection: isRTL ? 'row-reverse' : 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      paddingHorizontal: 20,
+                      paddingVertical: 16,
+                      backgroundColor: active ? theme.colors.primary + '15' : 'transparent',
+                    }}
+                  >
+                    <Text style={{ color: active ? theme.colors.primary : theme.colors.text, fontSize: 16, fontWeight: active ? '700' : '500' }}>
+                      {t(r.labelKey)}
+                    </Text>
+                    {active && <Ionicons name="checkmark" size={20} color={theme.colors.primary} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
       </Modal>
 
       <CustomAlert

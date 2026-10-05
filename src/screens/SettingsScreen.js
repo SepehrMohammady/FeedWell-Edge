@@ -15,6 +15,7 @@ import {
   NativeModules,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
+import { READING_FONTS, getReadingFont, readingFontStyle } from '../config/readingFonts';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,9 +26,13 @@ import { APP_VERSION } from '../config/version';
 import { useFeed } from '../context/FeedContext';
 import { useTheme } from '../context/ThemeContext';
 import { useAppSettings } from '../context/AppSettingsContext';
+import { useTranslation } from '../context/LanguageContext';
+import { APP_LANGUAGES, getAppLanguage } from '../i18n/appLanguages';
+import { tStatic } from '../i18n';
+import { formatLocalizedDate } from '../utils/formatDate';
 import { useReadLater } from '../context/ReadLaterContext';
 import { useAmbientSound } from '../context/AmbientSoundContext';
-import OnboardingTutorial from '../components/OnboardingTutorial';
+import { useTour, useTourTarget } from '../context/TourContext';
 import CustomAlert from '../components/CustomAlert';
 import { SafeStorage } from '../utils/SafeStorage';
 import {
@@ -47,14 +52,27 @@ import {
 } from '../utils/translationService';
 import { clearAllLocalLearningData, getLocalLearningSummary, getLocalLearningTelemetrySnapshot, purgeExpiredEvents } from '../edgeml/localLearningService';
 
+// "More from SeMo Lab" — the other apps, alphabetical. Names are brands and stay
+// untranslated; descriptions are localized.
+const SEMO_LAB_DEVELOPER_ID = '6449174405168948991';
+const SEMO_LAB_APPS = [
+  { name: 'LedgerWell', packageName: 'com.ledgerwell.app', descKey: 'settings.appLedgerWellDesc' },
+  { name: 'ThinkWell', packageName: 'com.thinkwell.app', descKey: 'settings.appThinkWellDesc' },
+  { name: 'WeatherWell', packageName: 'com.weatherwell.app', descKey: 'settings.appWeatherWellDesc' },
+];
+
 export default function SettingsScreen({ navigation }) {
   const { feeds, articles, clearAllData } = useFeed();
-  const { theme, isDarkMode, toggleTheme, paletteIndex, setPalette, LIGHT_PALETTES, DARK_PALETTES } = useTheme();
-  const { showImages, autoRefresh, showBookmarkIndicators, skipArticleView, showReadingPositionInFeeds, allowRotation, speechRate, readerHeaderActions, reduceMotion, readingReminder, onDeviceLearningEnabled, onDeviceLearningRetentionDays, updateShowImages, updateAutoRefresh, updateShowBookmarkIndicators, updateSkipArticleView, updateShowReadingPositionInFeeds, updateAllowRotation, updateSpeechRate, updateReaderHeaderActions, updateReduceMotion, updateReadingReminder, updateOnDeviceLearningEnabled, updateOnDeviceLearningRetentionDays, maxArticleAge, updateMaxArticleAge } = useAppSettings();
+  const { theme, isDarkMode, toggleTheme, paletteIndex, setPalette, LIGHT_PALETTES, DARK_PALETTES, amoledBlack, toggleAmoledBlack } = useTheme();
+  const { showImages, autoRefresh, showBookmarkIndicators, skipArticleView, showReadingPositionInFeeds, allowRotation, speechRate, readerHeaderActions, reduceMotion, readingReminder, updateShowImages, updateAutoRefresh, updateShowBookmarkIndicators, updateSkipArticleView, updateShowReadingPositionInFeeds, updateAllowRotation, updateSpeechRate, updateReaderHeaderActions, updateReduceMotion, updateReadingReminder, maxArticleAge, updateMaxArticleAge, autoScrollEnabled, autoScrollDelay, autoScrollSpeed, updateAutoScrollEnabled, updateAutoScrollDelay, updateAutoScrollSpeed, keepAwakeEnabled, updateKeepAwakeEnabled, autoTranslate, updateAutoTranslate } = useAppSettings();
+  const { feedRegionUserSet, updateFeedRegion, translationTargetUserSet, markTranslationTargetUserSet, readingFont, updateReadingFont, onDeviceLearningEnabled, onDeviceLearningRetentionDays, updateOnDeviceLearningEnabled, updateOnDeviceLearningRetentionDays } = useAppSettings();
   const { articles: readLaterArticles } = useReadLater();
   const { autoPlay, setAutoPlay, currentSound } = useAmbientSound();
+  const { t, language, setLanguage, isRTL, formatNumber } = useTranslation();
   const insets = useSafeAreaInsets();
-  const [showTutorial, setShowTutorial] = useState(false);
+  const tour = useTour();
+  const tourHeaderRef = useTourTarget('settings.header');
+  const [showAppLangPicker, setShowAppLangPicker] = useState(false);
 
   // Translation settings state
   const [targetLangCode, setTargetLangCode] = useState('en');
@@ -69,6 +87,8 @@ export default function SettingsScreen({ navigation }) {
   const [modelSearchQuery, setModelSearchQuery] = useState('');
   const [downloadingModel, setDownloadingModel] = useState(null); // code of model being downloaded
   const [showArticleAgePicker, setShowArticleAgePicker] = useState(false);
+  const [showAutoScrollDelayPicker, setShowAutoScrollDelayPicker] = useState(false);
+  const [showFontPicker, setShowFontPicker] = useState(false);
   const [alertConfig, setAlertConfig] = useState({ visible: false, title: '', message: '', buttons: [] });
   const restoreResolveRef = useRef(null);
 
@@ -77,6 +97,7 @@ export default function SettingsScreen({ navigation }) {
   const [showWidgetThemePicker, setShowWidgetThemePicker] = useState(false);
   const [widgetOpacity, setWidgetOpacity] = useState(100); // 0-100%
   const [learningSummary, setLearningSummary] = useState(null);
+  const [widgetShowImages, setWidgetShowImages] = useState(true);
 
   // Load target language and translation mode on mount
   useEffect(() => {
@@ -86,6 +107,7 @@ export default function SettingsScreen({ navigation }) {
     AsyncStorage.getItem('widget_theme').then(v => { if (v) setWidgetTheme(v); });
     AsyncStorage.getItem('widget_opacity').then(v => { if (v) setWidgetOpacity(parseInt(v, 10)); });
     refreshLearningSummary();
+    AsyncStorage.getItem('widget_show_images').then(v => { if (v !== null) setWidgetShowImages(v === 'true'); });
   }, []);
 
   const refreshLearningSummary = async () => {
@@ -188,23 +210,60 @@ export default function SettingsScreen({ navigation }) {
   const handleChangeDefaultLang = async (langCode) => {
     setTargetLangCode(langCode);
     await saveTargetLanguage(langCode);
+    markTranslationTargetUserSet(); // user explicitly chose a translation target
     setShowLangPicker(false);
     setLangSearchQuery('');
   };
 
+  const handleChangeAppLanguage = async (code) => {
+    setShowAppLangPicker(false);
+    if (code === language) return;
+    await setLanguage(code);
+
+    // Feed region follows the app language unless the user explicitly picked one.
+    if (!feedRegionUserSet) {
+      await updateFeedRegion(code === 'en' ? 'global' : code, false);
+    }
+
+    // Suggest (never force) a matching translation target + offline model.
+    if (!translationTargetUserSet && code !== 'en') {
+      setTargetLangCode(code);
+      await saveTargetLanguage(code);
+      try {
+        const mlName = getMLKitName(code);
+        const downloaded = await isModelDownloaded(mlName);
+        if (!downloaded) {
+          // Use tStatic with the NEW code: `t` from this render still points at the
+          // previous language until the re-render, so the prompt would otherwise
+          // appear in the old language.
+          setAlertConfig({
+            visible: true,
+            title: tStatic('language.offlineModelTitle', code),
+            message: tStatic('language.offlineModelBody', code, { language: getDisplayName(code) }),
+            icon: 'cloud-download-outline',
+            buttons: [
+              { text: tStatic('common.download', code), onPress: () => { downloadModel(mlName); } },
+              { text: tStatic('common.later', code), style: 'cancel' },
+            ],
+          });
+        }
+      } catch (e) { /* ignore */ }
+    }
+  };
+
   // Article age filter options
   const articleAgeOptions = [
-    { value: 0, label: 'No limit' },
-    { value: 1, label: '1 month' },
-    { value: 3, label: '3 months' },
-    { value: 6, label: '6 months' },
-    { value: 12, label: '1 year' },
-    { value: 24, label: '2 years' },
+    { value: 0, label: t('settings.articleAgeNoLimit') },
+    { value: 1, label: t('settings.articleAge1Month') },
+    { value: 3, label: t('settings.articleAge3Months') },
+    { value: 6, label: t('settings.articleAge6Months') },
+    { value: 12, label: t('settings.articleAge1Year') },
+    { value: 24, label: t('settings.articleAge2Years') },
   ];
 
   const getArticleAgeLabel = (months) => {
     const option = articleAgeOptions.find(o => o.value === months);
-    return option ? option.label : `${months} months`;
+    return option ? option.label : t('settings.articleAgeMonths', { count: formatNumber(months) });
   };
 
   // Widget settings handlers
@@ -226,25 +285,25 @@ export default function SettingsScreen({ navigation }) {
         if (!result) {
           setAlertConfig({
             visible: true,
-            title: 'Widget',
-            message: 'Your launcher does not support adding widgets this way. Please add the FeedWell widget manually from your home screen.',
+            title: t('settings.widgetAlertTitle'),
+            message: t('settings.widgetUnsupportedMessage'),
             icon: 'information-circle',
-            buttons: [{ text: 'OK', style: 'cancel' }],
+            buttons: [{ text: t('common.ok'), style: 'cancel' }],
           });
         }
       } catch (e) {
         setAlertConfig({
           visible: true,
-          title: 'Widget',
-          message: 'Could not add widget. Please add it manually from your home screen.',
+          title: t('settings.widgetAlertTitle'),
+          message: t('settings.widgetAddFailedMessage'),
           icon: 'information-circle',
-          buttons: [{ text: 'OK', style: 'cancel' }],
+          buttons: [{ text: t('common.ok'), style: 'cancel' }],
         });
       }
     }
   };
 
-  const widgetThemeLabel = widgetTheme === 'app' ? 'App Theme' : widgetTheme === 'light' ? 'Light' : 'Dark';
+  const widgetThemeLabel = widgetTheme === 'app' ? t('settings.widgetThemeApp') : widgetTheme === 'light' ? t('settings.widgetThemeLight') : t('settings.widgetThemeDark');
 
   const handleWidgetOpacityChange = async (value) => {
     const rounded = Math.round(value);
@@ -252,6 +311,14 @@ export default function SettingsScreen({ navigation }) {
     await AsyncStorage.setItem('widget_opacity', String(rounded));
     if (Platform.OS === 'android' && WidgetBridge) {
       try { WidgetBridge.setWidgetOpacity(Math.round(rounded * 2.55)); } catch (e) {}
+    }
+  };
+
+  const handleWidgetShowImagesChange = async (value) => {
+    setWidgetShowImages(value);
+    await AsyncStorage.setItem('widget_show_images', String(value));
+    if (Platform.OS === 'android' && WidgetBridge?.setWidgetShowImages) {
+      try { WidgetBridge.setWidgetShowImages(value); } catch (e) {}
     }
   };
 
@@ -278,10 +345,10 @@ export default function SettingsScreen({ navigation }) {
         setAllModels(prev => prev.map(m => m.code === lang.code ? { ...m, downloaded: true } : m));
         setDownloadedModels(prev => [...prev, { ...lang, downloaded: true }]);
       } else {
-        setAlertConfig({ visible: true, title: 'Download Failed', message: `Could not download ${lang.displayName} model.`, icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+        setAlertConfig({ visible: true, title: t('settings.downloadFailedTitle'), message: t('settings.downloadFailedMessage', { language: lang.displayName }), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
       }
     } catch (error) {
-      setAlertConfig({ visible: true, title: 'Download Failed', message: error.message, icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('settings.downloadFailedTitle'), message: error.message, icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
     } finally {
       setDownloadingModel(null);
     }
@@ -290,13 +357,13 @@ export default function SettingsScreen({ navigation }) {
   const handleDeleteModel = async (lang) => {
     setAlertConfig({
       visible: true,
-      title: 'Delete Model',
-      message: `Remove ${lang.displayName} offline translation model (~30 MB)?`,
+      title: t('settings.deleteModelTitle'),
+      message: t('settings.deleteModelConfirm', { language: lang.displayName }),
       icon: 'trash-outline',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Delete',
+          text: t('common.delete'),
           style: 'destructive',
           onPress: async () => {
             try {
@@ -306,7 +373,7 @@ export default function SettingsScreen({ navigation }) {
                 setDownloadedModels(prev => prev.filter(m => m.code !== lang.code));
               }
             } catch (error) {
-              setAlertConfig({ visible: true, title: 'Error', message: 'Could not delete the model.', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+              setAlertConfig({ visible: true, title: t('common.error'), message: t('settings.deleteModelError'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
             }
           }
         },
@@ -339,23 +406,23 @@ export default function SettingsScreen({ navigation }) {
     
     // For web platform, use window.confirm for better compatibility
     if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.confirm === 'function') {
-      const confirmed = window.confirm('Clear All Data?\n\nThis will remove all feeds and articles. This action cannot be undone.');
+      const confirmed = window.confirm(`${t('settings.clearAllDataTitle')}?\n\n${t('settings.clearAllDataConfirm')}`);
       if (confirmed) {
         performClearAllData();
       }
       return;
     }
-    
+
     // For mobile platforms, use CustomAlert
     setAlertConfig({
       visible: true,
-      title: 'Clear All Data',
-      message: 'This will remove all feeds and articles. This action cannot be undone.',
+      title: t('settings.clearAllDataTitle'),
+      message: t('settings.clearAllDataConfirm'),
       icon: 'trash-outline',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Clear',
+          text: t('settings.clearAction'),
           style: 'destructive',
           onPress: () => performClearAllData(),
         },
@@ -371,24 +438,24 @@ export default function SettingsScreen({ navigation }) {
       
       // Show success message
       if (Platform.OS === 'web') {
-        window.alert('All data has been cleared successfully!');
+        window.alert(t('settings.clearAllDataSuccess'));
       } else {
-        setAlertConfig({ visible: true, title: 'Success', message: 'All data has been cleared', icon: 'checkmark-circle-outline', buttons: [{ text: 'OK' }] });
+        setAlertConfig({ visible: true, title: t('common.success'), message: t('settings.clearAllDataSuccess'), icon: 'checkmark-circle-outline', buttons: [{ text: t('common.ok') }] });
       }
     } catch (error) {
       console.error('Error clearing data:', error);
-      
+
       // Show error message
       if (Platform.OS === 'web') {
-        window.alert('Failed to clear data. Please try again.');
+        window.alert(t('settings.clearAllDataError'));
       } else {
-        setAlertConfig({ visible: true, title: 'Error', message: 'Failed to clear data', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+        setAlertConfig({ visible: true, title: t('common.error'), message: t('settings.clearAllDataError'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
       }
     }
   };
 
-  const handleOpenWebsite = async () => {
-    const url = 'https://SepehrMohammady.ir';
+  const handleOpenWebsite = async (target) => {
+    const url = typeof target === 'string' ? target : 'https://semo-lab.com/feedwell/';
     try {
       if (Platform.OS === 'web') {
         window.open(url, '_blank');
@@ -397,31 +464,30 @@ export default function SettingsScreen({ navigation }) {
         if (supported) {
           await Linking.openURL(url);
         } else {
-          setAlertConfig({ visible: true, title: 'Error', message: 'Cannot open URL', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+          setAlertConfig({ visible: true, title: t('common.error'), message: t('settings.cannotOpenUrl'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
         }
       }
     } catch (error) {
       console.error('Error opening website:', error);
-      setAlertConfig({ visible: true, title: 'Error', message: 'Failed to open website', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('common.error'), message: t('settings.openWebsiteError'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
     }
   };
 
-  const handleOpenGitHub = async () => {
-    const url = 'https://github.com/SepehrMohammady/FeedWell';
+  // More from SeMo Lab: open the Play Store app directly, falling back to the
+  // web listing where there is no store app (or on web).
+  const openPlayListing = async (packageName) => {
     try {
-      if (Platform.OS === 'web') {
-        window.open(url, '_blank');
-      } else {
-        const supported = await Linking.canOpenURL(url);
-        if (supported) {
-          await Linking.openURL(url);
-        } else {
-          setAlertConfig({ visible: true, title: 'Error', message: 'Cannot open URL', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
-        }
-      }
-    } catch (error) {
-      console.error('Error opening GitHub:', error);
-      setAlertConfig({ visible: true, title: 'Error', message: 'Failed to open GitHub repository', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+      await Linking.openURL(`market://details?id=${packageName}`);
+    } catch (e) {
+      handleOpenWebsite(`https://play.google.com/store/apps/details?id=${packageName}`);
+    }
+  };
+
+  const openDeveloperPage = async () => {
+    try {
+      await Linking.openURL(`market://dev?id=${SEMO_LAB_DEVELOPER_ID}`);
+    } catch (e) {
+      handleOpenWebsite(`https://play.google.com/store/apps/dev?id=${SEMO_LAB_DEVELOPER_ID}`);
     }
   };
 
@@ -470,7 +536,7 @@ export default function SettingsScreen({ navigation }) {
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
         
-        setAlertConfig({ visible: true, title: 'Success', message: 'Backup file downloaded successfully!', icon: 'checkmark-circle-outline', buttons: [{ text: 'OK' }] });
+        setAlertConfig({ visible: true, title: t('common.success'), message: t('settings.backupDownloadedMessage'), icon: 'checkmark-circle-outline', buttons: [{ text: t('common.ok') }] });
       } else {
         // Mobile: Save to file system and share
         const fileUri = `${FileSystem.documentDirectory}${fileName}`;
@@ -478,18 +544,24 @@ export default function SettingsScreen({ navigation }) {
 
         const isAvailable = await Sharing.isAvailableAsync();
         if (isAvailable) {
-          await Sharing.shareAsync(fileUri, {
-            mimeType: 'application/octet-stream',
-            dialogTitle: 'Save FeedWell Backup',
-            UTI: 'public.data',
-          });
+          try {
+            await Sharing.shareAsync(fileUri, {
+              mimeType: 'application/octet-stream',
+              dialogTitle: t('settings.backupShareDialogTitle'),
+              UTI: 'public.data',
+            });
+          } catch (shareError) {
+            // Share sheet dismissed/failed — the backup file is already written, so still a success.
+            console.log('Share dismissed (backup file already saved):', shareError?.message);
+          }
+          setAlertConfig({ visible: true, title: t('settings.backupSuccessTitle'), message: t('settings.backupSuccessMessage'), icon: 'checkmark-circle-outline', buttons: [{ text: t('common.ok') }] });
         } else {
-          setAlertConfig({ visible: true, title: 'Success', message: `Backup saved to: ${fileUri}`, icon: 'checkmark-circle-outline', buttons: [{ text: 'OK' }] });
+          setAlertConfig({ visible: true, title: t('settings.backupSuccessTitle'), message: t('settings.backupSavedTo', { path: fileUri }), icon: 'checkmark-circle-outline', buttons: [{ text: t('common.ok') }] });
         }
       }
     } catch (error) {
       console.error('Error creating backup:', error);
-      setAlertConfig({ visible: true, title: 'Error', message: 'Failed to create backup. Please try again.', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('common.error'), message: t('settings.backupError'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
     }
   };
 
@@ -499,7 +571,7 @@ export default function SettingsScreen({ navigation }) {
 
       if (Platform.OS === 'web') {
         // Web platform: Use file input
-        setAlertConfig({ visible: true, title: 'Restore Backup', message: 'Please select a FeedWell backup file (.feedwell or .json)', icon: 'cloud-upload-outline', buttons: [{ text: 'OK' }] });
+        setAlertConfig({ visible: true, title: t('settings.restoreBackupTitle'), message: t('settings.restoreSelectFileMessage'), icon: 'cloud-upload-outline', buttons: [{ text: t('common.ok') }] });
         
         // Create file input dynamically
         const input = document.createElement('input');
@@ -516,7 +588,7 @@ export default function SettingsScreen({ navigation }) {
               jsonString = event.target.result;
               await processRestore(jsonString);
             } catch (error) {
-              setAlertConfig({ visible: true, title: 'Error', message: 'Invalid backup file format', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+              setAlertConfig({ visible: true, title: t('common.error'), message: t('settings.restoreInvalidFormat'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
             }
           };
           reader.readAsText(file);
@@ -541,7 +613,7 @@ export default function SettingsScreen({ navigation }) {
       }
     } catch (error) {
       console.error('Error restoring backup:', error);
-      setAlertConfig({ visible: true, title: 'Error', message: 'Failed to restore backup. Please check the file and try again.', icon: 'alert-circle-outline', buttons: [{ text: 'OK' }] });
+      setAlertConfig({ visible: true, title: t('common.error'), message: t('settings.restoreError'), icon: 'alert-circle-outline', buttons: [{ text: t('common.ok') }] });
     }
   };
 
@@ -556,31 +628,28 @@ export default function SettingsScreen({ navigation }) {
 
       // Confirm restore
       const confirmRestore = () => {
+        const restoreDate = backupData.timestamp
+          ? formatLocalizedDate(backupData.timestamp, language, formatNumber, { withTime: false, locale: language })
+          : t('settings.restoreUnknownDate');
+        const restoreMessage = t('settings.restoreConfirmMessage', {
+          date: restoreDate,
+          feeds: formatNumber(backupData.feeds.length),
+          articles: formatNumber(backupData.articles.length),
+          saved: formatNumber(backupData.readLater?.length || 0),
+        });
         return new Promise((resolve) => {
           if (Platform.OS === 'web') {
-            resolve(window.confirm(
-              `Restore backup from ${backupData.timestamp ? new Date(backupData.timestamp).toLocaleDateString() : 'unknown date'}?\n\n` +
-              `This will replace all current data:\n` +
-              `- ${backupData.feeds.length} feeds\n` +
-              `- ${backupData.articles.length} articles\n` +
-              `- ${backupData.readLater?.length || 0} saved articles\n\n` +
-              `This action cannot be undone.`
-            ));
+            resolve(window.confirm(restoreMessage));
           } else {
             restoreResolveRef.current = resolve;
             setAlertConfig({
               visible: true,
-              title: 'Restore Backup',
-              message: `Restore backup from ${backupData.timestamp ? new Date(backupData.timestamp).toLocaleDateString() : 'unknown date'}?\n\n` +
-              `This will replace all current data:\n` +
-              `- ${backupData.feeds.length} feeds\n` +
-              `- ${backupData.articles.length} articles\n` +
-              `- ${backupData.readLater?.length || 0} saved articles\n\n` +
-              `This action cannot be undone.`,
+              title: t('settings.restoreBackupTitle'),
+              message: restoreMessage,
               icon: 'cloud-download-outline',
               buttons: [
-                { text: 'Cancel', style: 'cancel', onPress: () => { restoreResolveRef.current?.(false); restoreResolveRef.current = null; } },
-                { text: 'Restore', style: 'destructive', onPress: () => { restoreResolveRef.current?.(true); restoreResolveRef.current = null; } },
+                { text: t('common.cancel'), style: 'cancel', onPress: () => { restoreResolveRef.current?.(false); restoreResolveRef.current = null; } },
+                { text: t('settings.restoreAction'), style: 'destructive', onPress: () => { restoreResolveRef.current?.(true); restoreResolveRef.current = null; } },
               ],
             });
           }
@@ -651,16 +720,16 @@ export default function SettingsScreen({ navigation }) {
 
       // Show success message and reload the app
       if (Platform.OS === 'web') {
-        if (window.confirm('Backup restored successfully! The app will now reload to apply changes.')) {
+        if (window.confirm(t('settings.restoreCompleteWebMessage'))) {
           window.location.reload();
         }
       } else {
         setAlertConfig({
           visible: true,
-          title: 'Restore Complete',
-          message: 'Backup restored successfully! Please close and reopen the app to see your restored data.',
+          title: t('settings.restoreCompleteTitle'),
+          message: t('settings.restoreCompleteMessage'),
           icon: 'checkmark-circle-outline',
-          buttons: [{ text: 'OK' }],
+          buttons: [{ text: t('common.ok') }],
         });
       }
     } catch (error) {
@@ -671,15 +740,15 @@ export default function SettingsScreen({ navigation }) {
 
   const SettingItem = ({ title, description, onPress, rightElement, showArrow = false, isLast = false }) => (
     <TouchableOpacity
-      style={[styles.settingItem, isLast && styles.settingItemLast]}
+      style={[styles.settingItem, { flexDirection: isRTL ? 'row-reverse' : 'row' }, isLast && styles.settingItemLast]}
       onPress={onPress}
       disabled={!onPress && !showArrow}
     >
       <View style={styles.settingContent}>
-        <Text style={styles.settingTitle}>{title}</Text>
-        {description && <Text style={styles.settingDescription}>{description}</Text>}
+        <Text style={[styles.settingTitle, { textAlign: isRTL ? 'right' : 'left' }]}>{title}</Text>
+        {description && <Text style={[styles.settingDescription, { textAlign: isRTL ? 'right' : 'left' }]}>{description}</Text>}
       </View>
-      {rightElement || (showArrow && <Ionicons name="chevron-forward" size={20} color="#ccc" />)}
+      {rightElement || (showArrow && <Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={20} color="#ccc" />)}
     </TouchableOpacity>
   );
 
@@ -689,7 +758,7 @@ export default function SettingsScreen({ navigation }) {
 
   const TesterItem = ({ children, isNote = false, isLast = false }) => (
     <View style={styles.testerItem}>
-      <Text style={isNote ? styles.thanksNote : styles.testerName}>{children}</Text>
+      <Text style={[isNote ? styles.thanksNote : styles.testerName, { textAlign: isRTL ? 'right' : 'left' }]}>{children}</Text>
     </View>
   );
 
@@ -710,7 +779,8 @@ export default function SettingsScreen({ navigation }) {
       fontSize: 20,
       fontWeight: '600',
       color: theme.colors.text,
-      marginLeft: 16,
+      [isRTL ? 'marginRight' : 'marginLeft']: 16,
+      textAlign: isRTL ? 'right' : 'left',
     },
     content: {
       flex: 1,
@@ -731,6 +801,7 @@ export default function SettingsScreen({ navigation }) {
       marginTop: 24,
       marginBottom: 8,
       marginHorizontal: 16,
+      textAlign: isRTL ? 'right' : 'left',
     },
     sectionTitle: {
       fontSize: 16,
@@ -980,17 +1051,17 @@ export default function SettingsScreen({ navigation }) {
   });
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Settings</Text>
+    <SafeAreaView edges={["top", "left", "right"]} style={styles.container}>
+      <View ref={tourHeaderRef} collapsable={false} style={[styles.header, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+        <Text style={styles.headerTitle}>{t('tab.settings')}</Text>
       </View>
 
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        <SectionHeader title="Preferences" />
+        <SectionHeader title={t('settings.sectionPreferences')} />
         <View style={styles.section}>
           <SettingItem
-            title="Auto Refresh"
-            description="Automatically refresh feeds when opening the app"
+            title={t('settings.autoRefresh')}
+            description={t('settings.autoRefreshDesc')}
             rightElement={
               <Switch
                 value={autoRefresh}
@@ -1002,8 +1073,8 @@ export default function SettingsScreen({ navigation }) {
           />
           
           <SettingItem
-            title="Show Images"
-            description="Display images in articles and feed list"
+            title={t('settings.showImages')}
+            description={t('settings.showImagesDesc')}
             rightElement={
               <Switch
                 value={showImages}
@@ -1015,8 +1086,8 @@ export default function SettingsScreen({ navigation }) {
           />
           
           <SettingItem
-            title="Dark Mode"
-            description="Switch between light and dark themes"
+            title={t('settings.darkMode')}
+            description={t('settings.darkModeDesc')}
             rightElement={
               <Switch
                 value={isDarkMode}
@@ -1026,9 +1097,35 @@ export default function SettingsScreen({ navigation }) {
               />
             }
           />
+          {isDarkMode && (
+            <SettingItem
+              title={t('settings.amoledBlack')}
+              description={t('settings.amoledBlackDesc')}
+              rightElement={
+                <Switch
+                  value={amoledBlack}
+                  onValueChange={toggleAmoledBlack}
+                  trackColor={{ false: '#767577', true: theme.colors.primary }}
+                  thumbColor={amoledBlack ? '#fff' : '#f4f3f4'}
+                />
+              }
+            />
+          )}
           <SettingItem
-            title="Theme Color"
-            description={LIGHT_PALETTES[paletteIndex].name}
+            title={t('settings.readingFont')}
+            description={getReadingFont(readingFont).label || t(getReadingFont(readingFont).labelKey)}
+            onPress={() => setShowFontPicker(true)}
+            rightElement={<Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={20} color={theme.colors.primary} />}
+          />
+          <SettingItem
+            title={t('language.appTitle')}
+            description={getAppLanguage(language).nativeLabel}
+            onPress={() => setShowAppLangPicker(true)}
+            rightElement={<Ionicons name="chevron-forward" size={20} color={theme.colors.primary} />}
+          />
+          <SettingItem
+            title={t('settings.themeColor')}
+            description={t(LIGHT_PALETTES[paletteIndex].nameKey)}
             rightElement={
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 {LIGHT_PALETTES.map((p, i) => (
@@ -1045,8 +1142,8 @@ export default function SettingsScreen({ navigation }) {
             }
           />
           <SettingItem
-            title="Bookmark Indicators"
-            description="Show reading position markers in article reader"
+            title={t('settings.bookmarkIndicators')}
+            description={t('settings.bookmarkIndicatorsDesc')}
             rightElement={
               <Switch
                 value={showBookmarkIndicators}
@@ -1057,8 +1154,8 @@ export default function SettingsScreen({ navigation }) {
             }
           />
           <SettingItem
-            title="Open Reader Directly"
-            description="Skip article preview and open the Reader straight from Feeds"
+            title={t('settings.openReaderDirectly')}
+            description={t('settings.openReaderDirectlyDesc')}
             rightElement={
               <Switch
                 value={skipArticleView}
@@ -1069,8 +1166,8 @@ export default function SettingsScreen({ navigation }) {
             }
           />
           <SettingItem
-            title="Reading Position in Feeds"
-            description="Show reading position markers between articles in the feed list"
+            title={t('settings.readingPositionInFeeds')}
+            description={t('settings.readingPositionInFeedsDesc')}
             rightElement={
               <Switch
                 value={showReadingPositionInFeeds}
@@ -1081,8 +1178,8 @@ export default function SettingsScreen({ navigation }) {
             }
           />
           <SettingItem
-            title="Screen Rotation"
-            description="Allow the app to rotate when you turn your device"
+            title={t('settings.screenRotation')}
+            description={t('settings.screenRotationDesc')}
             rightElement={
               <Switch
                 value={allowRotation}
@@ -1093,8 +1190,8 @@ export default function SettingsScreen({ navigation }) {
             }
           />
           <SettingItem
-            title="Reduce Motion (Kinetosis)"
-            description="Minimize animations and show a fixed dot to reduce motion sickness"
+            title={t('settings.reduceMotion')}
+            description={t('settings.reduceMotionDesc')}
             rightElement={
               <Switch
                 value={reduceMotion}
@@ -1105,8 +1202,8 @@ export default function SettingsScreen({ navigation }) {
             }
           />
           <SettingItem
-            title="Reading Reminder"
-            description={readingReminder ? 'Get notified if you haven\'t read in a while' : 'No reading reminders'}
+            title={t('settings.readingReminder')}
+            description={readingReminder ? t('settings.readingReminderOnDesc') : t('settings.readingReminderOffDesc')}
             rightElement={
               <Switch
                 value={readingReminder}
@@ -1117,8 +1214,64 @@ export default function SettingsScreen({ navigation }) {
             }
           />
           <SettingItem
-            title="Article Age Filter"
-            description={maxArticleAge === 0 ? 'No limit — show all articles' : `Only show articles from the last ${getArticleAgeLabel(maxArticleAge)}`}
+            title={t('settings.autoScroll')}
+            description={t('settings.autoScrollDesc')}
+            rightElement={
+              <Switch
+                value={autoScrollEnabled}
+                onValueChange={updateAutoScrollEnabled}
+                trackColor={{ false: '#767577', true: theme.colors.primary }}
+                thumbColor={autoScrollEnabled ? '#fff' : '#f4f3f4'}
+              />
+            }
+          />
+          {autoScrollEnabled && (
+            <SettingItem
+              title={t('settings.autoScrollDelay')}
+              description={t('settings.autoScrollDelayValue', { count: formatNumber(autoScrollDelay) })}
+              onPress={() => setShowAutoScrollDelayPicker(true)}
+              rightElement={<Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={20} color={theme.colors.primary} />}
+            />
+          )}
+          {autoScrollEnabled && (
+            <View style={{ paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border }}>
+              <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                <Text style={{ fontSize: 15, color: theme.colors.text }}>{t('settings.autoScrollSpeed')}</Text>
+                <Text style={{ fontSize: 14, color: theme.colors.textSecondary }}>{t('settings.percent', { value: formatNumber(autoScrollSpeed) })}</Text>
+              </View>
+              <Slider
+                minimumValue={25}
+                maximumValue={250}
+                step={25}
+                value={autoScrollSpeed}
+                onSlidingComplete={(v) => updateAutoScrollSpeed(Math.round(v))}
+                minimumTrackTintColor={theme.colors.primary}
+                maximumTrackTintColor={theme.colors.border}
+                thumbTintColor={theme.colors.primary}
+              />
+              <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', justifyContent: 'space-between' }}>
+                <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>{t('settings.speedSlow')}</Text>
+                <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>{t('settings.speedFast')}</Text>
+              </View>
+            </View>
+          )}
+          {autoScrollEnabled && (
+            <SettingItem
+              title={t('settings.keepAwake')}
+              description={t('settings.keepAwakeDesc')}
+              rightElement={
+                <Switch
+                  value={keepAwakeEnabled}
+                  onValueChange={updateKeepAwakeEnabled}
+                  trackColor={{ false: '#767577', true: theme.colors.primary }}
+                  thumbColor={keepAwakeEnabled ? '#fff' : '#f4f3f4'}
+                />
+              }
+            />
+          )}
+          <SettingItem
+            title={t('settings.articleAgeFilter')}
+            description={maxArticleAge === 0 ? t('settings.articleAgeFilterNoLimitDesc') : t('settings.articleAgeFilterDesc', { period: getArticleAgeLabel(maxArticleAge) })}
             onPress={() => setShowArticleAgePicker(true)}
             isLast={true}
             rightElement={<Ionicons name="chevron-forward" size={20} color={theme.colors.primary} />}
@@ -1127,24 +1280,36 @@ export default function SettingsScreen({ navigation }) {
 
         {Platform.OS === 'android' && (
           <>
-            <SectionHeader title="Home Screen Widget" />
+            <SectionHeader title={t('settings.sectionWidget')} />
             <View style={styles.section}>
               <SettingItem
-                title="Add Widget to Home Screen"
-                description="Place the FeedWell widget on your home screen"
+                title={t('settings.addWidget')}
+                description={t('settings.addWidgetDesc')}
                 onPress={handleAddWidget}
                 rightElement={<Ionicons name="add-circle-outline" size={22} color={theme.colors.primary} />}
               />
               <SettingItem
-                title="Widget Theme"
+                title={t('settings.widgetTheme')}
                 description={widgetThemeLabel}
                 onPress={() => setShowWidgetThemePicker(true)}
-                rightElement={<Ionicons name="chevron-forward" size={20} color={theme.colors.primary} />}
+                rightElement={<Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={20} color={theme.colors.primary} />}
+              />
+              <SettingItem
+                title={t('settings.widgetImages')}
+                description={t('settings.widgetImagesDesc')}
+                rightElement={
+                  <Switch
+                    value={widgetShowImages}
+                    onValueChange={handleWidgetShowImagesChange}
+                    trackColor={{ false: '#767577', true: theme.colors.primary }}
+                    thumbColor={widgetShowImages ? '#fff' : '#f4f3f4'}
+                  />
+                }
               />
               <View style={{ paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ fontSize: 15, color: theme.colors.text }}>Widget Opacity</Text>
-                  <Text style={{ fontSize: 14, color: theme.colors.textSecondary }}>{widgetOpacity}%</Text>
+                <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 15, color: theme.colors.text }}>{t('settings.widgetOpacity')}</Text>
+                  <Text style={{ fontSize: 14, color: theme.colors.textSecondary }}>{t('settings.percent', { value: formatNumber(widgetOpacity) })}</Text>
                 </View>
                 <Slider
                   minimumValue={20}
@@ -1162,11 +1327,11 @@ export default function SettingsScreen({ navigation }) {
           </>
         )}
 
-        <SectionHeader title="Ambient Sounds" />
+        <SectionHeader title={t('settings.sectionAmbientSounds')} />
         <View style={styles.section}>
           <SettingItem
-            title="Auto-play on Startup"
-            description={autoPlay ? `Will play ${currentSound?.name || 'last sound'} when app opens` : 'Ambient sounds won\'t start automatically'}
+            title={t('settings.autoPlayStartup')}
+            description={autoPlay ? t('settings.autoPlayOnDesc', { sound: currentSound ? t(currentSound.nameKey) : t('settings.lastSound') }) : t('settings.autoPlayOffDesc')}
             onPress={() => setAutoPlay(!autoPlay)}
             isLast={true}
             rightElement={
@@ -1180,12 +1345,12 @@ export default function SettingsScreen({ navigation }) {
           />
         </View>
 
-        <SectionHeader title="Read Aloud" />
+        <SectionHeader title={t('settings.sectionReadAloud')} />
         <View style={styles.section}>
           <View style={[styles.settingItem, { flexDirection: 'column', alignItems: 'stretch', borderBottomWidth: 0 }]}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <Text style={[styles.settingTitle, { color: theme.colors.text }]}>Speech Speed</Text>
-              <Text style={[styles.settingTitle, { color: theme.colors.primary, fontWeight: '700' }]}>{speechRate}x</Text>
+            <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <Text style={[styles.settingTitle, { color: theme.colors.text }]}>{t('settings.speechSpeed')}</Text>
+              <Text style={[styles.settingTitle, { color: theme.colors.primary, fontWeight: '700' }]}>{t('settings.speedMultiplier', { rate: formatNumber(speechRate) })}</Text>
             </View>
             <Slider
               style={{ width: '100%', height: 40 }}
@@ -1198,68 +1363,80 @@ export default function SettingsScreen({ navigation }) {
               maximumTrackTintColor={theme.colors.border}
               thumbTintColor={theme.colors.primary}
             />
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>Slow</Text>
-              <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>Fast</Text>
+            <View style={{ flexDirection: isRTL ? 'row-reverse' : 'row', justifyContent: 'space-between' }}>
+              <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>{t('settings.speedSlow')}</Text>
+              <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>{t('settings.speedFast')}</Text>
             </View>
           </View>
         </View>
 
-        <SectionHeader title="Translation" />
+        <SectionHeader title={t('settings.sectionTranslation')} />
         <View style={styles.section}>
           <SettingItem
-            title="Translation Mode"
+            title={t('settings.translationMode')}
             description={
-              translationMode === TRANSLATION_MODES.AUTO ? 'Auto: Online first, offline fallback' :
-              translationMode === TRANSLATION_MODES.ONLINE ? 'Online only (Google Translate)' :
-              'Offline only (ML Kit)'
+              translationMode === TRANSLATION_MODES.AUTO ? t('settings.translationModeAutoDesc') :
+              translationMode === TRANSLATION_MODES.ONLINE ? t('settings.translationModeOnlineDesc') :
+              t('settings.translationModeOfflineDesc')
             }
             onPress={() => setShowTranslationModePicker(true)}
-            rightElement={<Ionicons name="chevron-forward" size={20} color={theme.colors.primary} />}
+            rightElement={<Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={20} color={theme.colors.primary} />}
           />
           <SettingItem
-            title="Default Language"
-            description={`Translate articles to ${getDisplayName(targetLangCode)}`}
+            title={t('settings.defaultLanguage')}
+            description={t('settings.defaultLanguageDesc', { language: getDisplayName(targetLangCode) })}
             onPress={() => setShowLangPicker(true)}
-            rightElement={<Ionicons name="chevron-forward" size={20} color={theme.colors.primary} />}
+            rightElement={<Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={20} color={theme.colors.primary} />}
           />
           <SettingItem
-            title="Downloaded Models"
-            description="View and manage offline translation models"
+            title={t('settings.autoTranslate')}
+            description={t('settings.autoTranslateDesc', { language: getDisplayName(targetLangCode) })}
+            rightElement={
+              <Switch
+                value={autoTranslate}
+                onValueChange={updateAutoTranslate}
+                trackColor={{ false: '#767577', true: theme.colors.primary }}
+                thumbColor={autoTranslate ? '#fff' : '#f4f3f4'}
+              />
+            }
+          />
+          <SettingItem
+            title={t('settings.downloadedModels')}
+            description={t('settings.downloadedModelsDesc')}
             onPress={handleOpenModelManager}
             isLast={true}
             rightElement={<Ionicons name="cloud-download-outline" size={20} color={theme.colors.primary} />}
           />
         </View>
 
-        <SectionHeader title="Help" />
+        <SectionHeader title={t('settings.sectionHelp')} />
         <View style={styles.section}>
           <SettingItem
-            title="App Tutorial"
-            description="Learn how to use FeedWell features"
-            onPress={() => setShowTutorial(true)}
+            title={t('settings.appTour')}
+            description={t('settings.appTourDesc')}
+            onPress={() => tour?.startTour()}
             isLast={true}
             rightElement={<Ionicons name="help-circle-outline" size={20} color={theme.colors.primary} />}
           />
         </View>
 
-        <SectionHeader title="Data" />
+        <SectionHeader title={t('settings.sectionData')} />
         <View style={styles.section}>
           <SettingItem
-            title="Backup Data"
-            description="Export all feeds, articles, and settings"
+            title={t('settings.backupData')}
+            description={t('settings.backupDataDesc')}
             onPress={handleBackupData}
             rightElement={<Ionicons name="push-outline" size={20} color={theme.colors.primary} />}
           />
           <SettingItem
-            title="Restore Data"
-            description="Import data from a backup file"
+            title={t('settings.restoreData')}
+            description={t('settings.restoreDataDesc')}
             onPress={handleRestoreData}
             rightElement={<Ionicons name="download-outline" size={20} color={theme.colors.primary} />}
           />
           <SettingItem
-            title="Clear All Data"
-            description="Remove all feeds and articles"
+            title={t('settings.clearAllData')}
+            description={t('settings.clearAllDataDesc')}
             onPress={handleClearAllData}
             isLast={true}
             rightElement={<Ionicons name="trash-outline" size={20} color={theme.colors.error} />}
@@ -1312,60 +1489,79 @@ export default function SettingsScreen({ navigation }) {
           />
         </View>
 
-        <SectionHeader title="TESTERS" />
+        <SectionHeader title={t('settings.sectionTesters')} />
         <View style={styles.section}>
-          <TesterItem isNote={true}>Thank you for your valuable feedback!</TesterItem>
+          <TesterItem isNote={true}>{t('settings.testersThankYou')}</TesterItem>
           <TesterItem>Amir Arsalan Serajoddin Mirghaed</TesterItem>
           <TesterItem>Amirhossein Yaghoubnezhad</TesterItem>
+          <TesterItem>Basel Badich</TesterItem>
           <TesterItem>Chris (few-thoughts)</TesterItem>
+          <TesterItem>Danoush Faryar</TesterItem>
           <TesterItem>Houriyeh Emadoleslami</TesterItem>
           <TesterItem>Mohammad Torabi</TesterItem>
+          <TesterItem>Mojtaba Alehosseini</TesterItem>
+          <TesterItem>Sadeq Hayati</TesterItem>
           <TesterItem isLast={true}>Saeed Abdollahi Taromsari</TesterItem>
         </View>
 
-        <SectionHeader title="About" />
+        <SectionHeader title={t('settings.sectionAbout')} />
         <View style={styles.section}>
           <SettingItem
             title="FeedWell"
-            description="Ad-free RSS reader for all platforms"
+            description={t('settings.aboutTagline')}
           />
           <SettingItem
-            title="Version"
-            description={APP_VERSION.fullVersion}
+            title={t('settings.version')}
+            description={formatNumber(APP_VERSION.version)}
           />
           <SettingItem
-            title="Developer"
-            description="Sepehr Mohammady"
+            title={t('settings.developer')}
+            description="SeMo Lab"
             onPress={handleOpenWebsite}
             rightElement={<Ionicons name="open-outline" size={20} color={theme.colors.primary} />}
           />
           <SettingItem
-            title="Source Code"
-            description="github.com/SepehrMohammady/FeedWell"
-            onPress={handleOpenGitHub}
-            rightElement={<Ionicons name="logo-github" size={20} color={theme.colors.primary} />}
-          />
-          <SettingItem
-            title="Privacy"
-            description="No data is collected or shared"
+            title={t('settings.privacy')}
+            description={t('settings.privacyDesc')}
+            onPress={() => handleOpenWebsite('https://semo-lab.com/feedwell/privacy-policy/')}
             isLast={true}
+            rightElement={<Ionicons name="open-outline" size={20} color={theme.colors.primary} />}
+          />
+        </View>
+
+        <SectionHeader title={t('settings.sectionMoreApps')} />
+        <View style={styles.section}>
+          {SEMO_LAB_APPS.map((app) => (
+            <SettingItem
+              key={app.packageName}
+              title={app.name}
+              description={t(app.descKey)}
+              onPress={() => openPlayListing(app.packageName)}
+              rightElement={<Ionicons name="logo-google-playstore" size={20} color={theme.colors.primary} />}
+            />
+          ))}
+          <SettingItem
+            title={t('settings.allApps')}
+            description={t('settings.allAppsDesc')}
+            onPress={openDeveloperPage}
+            isLast={true}
+            rightElement={<Ionicons name="open-outline" size={20} color={theme.colors.primary} />}
           />
         </View>
 
         <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            FeedWell automatically blocks ads and tracking from RSS feeds to provide a clean reading experience.
+          {/* Centered like every language; explicit writingDirection keeps the bidi
+              base stable so the line doesn't flip when it starts with a Latin word. */}
+          <Text style={[styles.footerText, { writingDirection: isRTL ? 'rtl' : 'ltr', textAlign: 'center' }]}>
+            {t('settings.footerText')}
           </Text>
-          <Text style={styles.copyrightText}>
-            © 2026 Sepehr Mohammady. Open source under MIT License.
+          {/* Keep the copyright in English + LTR for RTL languages (it's brand + year). */}
+          <Text style={[styles.copyrightText, { writingDirection: 'ltr', textAlign: 'center' }]}>
+            {isRTL ? tStatic('settings.copyright', 'en') : t('settings.copyright')}
           </Text>
         </View>
       </ScrollView>
 
-      <OnboardingTutorial 
-        visible={showTutorial} 
-        onComplete={() => setShowTutorial(false)}
-      />
 
       {/* Default Language Picker Modal */}
       <Modal
@@ -1379,8 +1575,8 @@ export default function SettingsScreen({ navigation }) {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Default Translate Language</Text>
+            <View style={[styles.modalHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={styles.modalTitle}>{t('settings.defaultTranslateLangTitle')}</Text>
               <TouchableOpacity
                 onPress={() => {
                   setShowLangPicker(false);
@@ -1392,11 +1588,11 @@ export default function SettingsScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalSearchContainer}>
+            <View style={[styles.modalSearchContainer, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
               <Ionicons name="search" size={18} color={theme.colors.textSecondary} />
               <TextInput
-                style={styles.modalSearchInput}
-                placeholder="Search languages..."
+                style={[styles.modalSearchInput, { textAlign: isRTL ? 'right' : 'left', marginLeft: isRTL ? 0 : 8, marginRight: isRTL ? 8 : 0 }]}
+                placeholder={t('settings.searchLanguagesPlaceholder')}
                 placeholderTextColor={theme.colors.textTertiary}
                 value={langSearchQuery}
                 onChangeText={setLangSearchQuery}
@@ -1417,6 +1613,7 @@ export default function SettingsScreen({ navigation }) {
                 <TouchableOpacity
                   style={[
                     styles.langItem,
+                    { flexDirection: isRTL ? 'row-reverse' : 'row' },
                     item.code === targetLangCode && styles.langItemSelected,
                   ]}
                   onPress={() => handleChangeDefaultLang(item.code)}
@@ -1424,12 +1621,65 @@ export default function SettingsScreen({ navigation }) {
                   <Text
                     style={[
                       styles.langItemText,
+                      { textAlign: isRTL ? 'right' : 'left' },
                       item.code === targetLangCode && styles.langItemTextSelected,
                     ]}
                   >
                     {item.displayName}
                   </Text>
                   {item.code === targetLangCode && (
+                    <Ionicons name="checkmark" size={20} color={theme.colors.primary} />
+                  )}
+                </TouchableOpacity>
+              )}
+              showsVerticalScrollIndicator={false}
+              style={styles.langList}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      {/* App Language Picker Modal */}
+      <Modal
+        visible={showAppLangPicker}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowAppLangPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={[styles.modalHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={styles.modalTitle}>{t('language.pickerTitle')}</Text>
+              <TouchableOpacity
+                onPress={() => setShowAppLangPicker(false)}
+                style={styles.modalCloseButton}
+              >
+                <Ionicons name="close" size={24} color={theme.colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <FlatList
+              data={APP_LANGUAGES}
+              keyExtractor={(item) => item.code}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[
+                    styles.langItem,
+                    { flexDirection: isRTL ? 'row-reverse' : 'row' },
+                    item.code === language && styles.langItemSelected,
+                  ]}
+                  onPress={() => handleChangeAppLanguage(item.code)}
+                >
+                  <Text
+                    style={[
+                      styles.langItemText,
+                      { textAlign: isRTL ? 'right' : 'left' },
+                      item.code === language && styles.langItemTextSelected,
+                    ]}
+                  >
+                    {item.nativeLabel}{item.code !== 'en' ? `  ·  ${item.englishLabel}` : ''}
+                  </Text>
+                  {item.code === language && (
                     <Ionicons name="checkmark" size={20} color={theme.colors.primary} />
                   )}
                 </TouchableOpacity>
@@ -1453,8 +1703,8 @@ export default function SettingsScreen({ navigation }) {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Offline Models</Text>
+            <View style={[styles.modalHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={styles.modalTitle}>{t('settings.offlineModelsTitle')}</Text>
               <TouchableOpacity
                 onPress={() => {
                   setShowModelManager(false);
@@ -1466,11 +1716,11 @@ export default function SettingsScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.modalSearchContainer}>
+            <View style={[styles.modalSearchContainer, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
               <Ionicons name="search" size={18} color={theme.colors.textSecondary} />
               <TextInput
-                style={styles.modalSearchInput}
-                placeholder="Search languages..."
+                style={[styles.modalSearchInput, { textAlign: isRTL ? 'right' : 'left', marginLeft: isRTL ? 0 : 8, marginRight: isRTL ? 8 : 0 }]}
+                placeholder={t('settings.searchLanguagesPlaceholder')}
                 placeholderTextColor={theme.colors.textTertiary}
                 value={modelSearchQuery}
                 onChangeText={setModelSearchQuery}
@@ -1487,7 +1737,7 @@ export default function SettingsScreen({ navigation }) {
             {loadingModels ? (
               <View style={styles.modelLoadingContainer}>
                 <ActivityIndicator size="large" color={theme.colors.primary} />
-                <Text style={styles.modelLoadingText}>Checking models...</Text>
+                <Text style={styles.modelLoadingText}>{t('settings.checkingModels')}</Text>
               </View>
             ) : (
               <FlatList
@@ -1497,14 +1747,14 @@ export default function SettingsScreen({ navigation }) {
                 }
                 keyExtractor={(item) => item.code}
                 renderItem={({ item }) => (
-                  <View style={styles.modelItem}>
-                    <View style={styles.modelItemInfo}>
+                  <View style={[styles.modelItem, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                    <View style={[styles.modelItemInfo, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
                       <Ionicons
                         name={item.downloaded ? 'checkmark-circle' : 'cloud-download-outline'}
                         size={20}
                         color={item.downloaded ? theme.colors.success : theme.colors.textSecondary}
                       />
-                      <Text style={[styles.modelItemText, item.downloaded && { fontWeight: '600' }]}>{item.displayName}</Text>
+                      <Text style={[styles.modelItemText, { textAlign: isRTL ? 'right' : 'left' }, item.downloaded && { fontWeight: '600' }]}>{item.displayName}</Text>
                     </View>
                     {downloadingModel === item.code ? (
                       <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -1529,11 +1779,13 @@ export default function SettingsScreen({ navigation }) {
                 style={styles.langList}
                 ListHeaderComponent={
                   <View style={styles.modelListHeader}>
-                    <Text style={styles.modelListHeaderText}>
-                      {downloadedModels.length} model{downloadedModels.length !== 1 ? 's' : ''} downloaded
+                    <Text style={[styles.modelListHeaderText, { textAlign: isRTL ? 'right' : 'left' }]}>
+                      {downloadedModels.length === 1
+                        ? t('settings.modelsDownloadedOne', { count: formatNumber(downloadedModels.length) })
+                        : t('settings.modelsDownloadedOther', { count: formatNumber(downloadedModels.length) })}
                     </Text>
-                    <Text style={styles.modelListSubtext}>
-                      Each model is ~30 MB. Downloaded models work fully offline.
+                    <Text style={[styles.modelListSubtext, { textAlign: isRTL ? 'right' : 'left' }]}>
+                      {t('settings.modelsDownloadedSubtext')}
                     </Text>
                   </View>
                 }
@@ -1552,8 +1804,8 @@ export default function SettingsScreen({ navigation }) {
       >
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContainer, { height: 'auto', maxHeight: '50%' }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Translation Mode</Text>
+            <View style={[styles.modalHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={styles.modalTitle}>{t('settings.translationMode')}</Text>
               <TouchableOpacity
                 onPress={() => setShowTranslationModePicker(false)}
                 style={styles.modalCloseButton}
@@ -1563,14 +1815,14 @@ export default function SettingsScreen({ navigation }) {
             </View>
 
             <TouchableOpacity
-              style={[styles.modeItem, translationMode === TRANSLATION_MODES.AUTO && styles.langItemSelected]}
+              style={[styles.modeItem, { flexDirection: isRTL ? 'row-reverse' : 'row' }, translationMode === TRANSLATION_MODES.AUTO && styles.langItemSelected]}
               onPress={() => handleSelectTranslationMode(TRANSLATION_MODES.AUTO)}
             >
-              <View style={styles.modeItemContent}>
+              <View style={[styles.modeItemContent, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
                 <Ionicons name="sync-outline" size={22} color={translationMode === TRANSLATION_MODES.AUTO ? theme.colors.primary : theme.colors.text} />
                 <View style={styles.modeItemText}>
-                  <Text style={[styles.modeItemTitle, translationMode === TRANSLATION_MODES.AUTO && { color: theme.colors.primary }]}>Auto (Recommended)</Text>
-                  <Text style={styles.modeItemDesc}>Online first, offline fallback when no internet</Text>
+                  <Text style={[styles.modeItemTitle, { textAlign: isRTL ? 'right' : 'left' }, translationMode === TRANSLATION_MODES.AUTO && { color: theme.colors.primary }]}>{t('settings.translationModeAutoTitle')}</Text>
+                  <Text style={[styles.modeItemDesc, { textAlign: isRTL ? 'right' : 'left' }]}>{t('settings.translationModeAutoLong')}</Text>
                 </View>
               </View>
               {translationMode === TRANSLATION_MODES.AUTO && (
@@ -1579,14 +1831,14 @@ export default function SettingsScreen({ navigation }) {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.modeItem, translationMode === TRANSLATION_MODES.ONLINE && styles.langItemSelected]}
+              style={[styles.modeItem, { flexDirection: isRTL ? 'row-reverse' : 'row' }, translationMode === TRANSLATION_MODES.ONLINE && styles.langItemSelected]}
               onPress={() => handleSelectTranslationMode(TRANSLATION_MODES.ONLINE)}
             >
-              <View style={styles.modeItemContent}>
+              <View style={[styles.modeItemContent, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
                 <Ionicons name="cloud-outline" size={22} color={translationMode === TRANSLATION_MODES.ONLINE ? theme.colors.primary : theme.colors.text} />
                 <View style={styles.modeItemText}>
-                  <Text style={[styles.modeItemTitle, translationMode === TRANSLATION_MODES.ONLINE && { color: theme.colors.primary }]}>Online Only</Text>
-                  <Text style={styles.modeItemDesc}>Google Translate — higher quality, requires internet</Text>
+                  <Text style={[styles.modeItemTitle, { textAlign: isRTL ? 'right' : 'left' }, translationMode === TRANSLATION_MODES.ONLINE && { color: theme.colors.primary }]}>{t('settings.translationModeOnlineTitle')}</Text>
+                  <Text style={[styles.modeItemDesc, { textAlign: isRTL ? 'right' : 'left' }]}>{t('settings.translationModeOnlineLong')}</Text>
                 </View>
               </View>
               {translationMode === TRANSLATION_MODES.ONLINE && (
@@ -1595,14 +1847,14 @@ export default function SettingsScreen({ navigation }) {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.modeItem, { borderBottomWidth: 0 }, translationMode === TRANSLATION_MODES.OFFLINE && styles.langItemSelected]}
+              style={[styles.modeItem, { flexDirection: isRTL ? 'row-reverse' : 'row' }, { borderBottomWidth: 0 }, translationMode === TRANSLATION_MODES.OFFLINE && styles.langItemSelected]}
               onPress={() => handleSelectTranslationMode(TRANSLATION_MODES.OFFLINE)}
             >
-              <View style={styles.modeItemContent}>
+              <View style={[styles.modeItemContent, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
                 <Ionicons name="phone-portrait-outline" size={22} color={translationMode === TRANSLATION_MODES.OFFLINE ? theme.colors.primary : theme.colors.text} />
                 <View style={styles.modeItemText}>
-                  <Text style={[styles.modeItemTitle, translationMode === TRANSLATION_MODES.OFFLINE && { color: theme.colors.primary }]}>Offline Only</Text>
-                  <Text style={styles.modeItemDesc}>ML Kit on-device — works without internet, basic quality</Text>
+                  <Text style={[styles.modeItemTitle, { textAlign: isRTL ? 'right' : 'left' }, translationMode === TRANSLATION_MODES.OFFLINE && { color: theme.colors.primary }]}>{t('settings.translationModeOfflineTitle')}</Text>
+                  <Text style={[styles.modeItemDesc, { textAlign: isRTL ? 'right' : 'left' }]}>{t('settings.translationModeOfflineLong')}</Text>
                 </View>
               </View>
               {translationMode === TRANSLATION_MODES.OFFLINE && (
@@ -1622,8 +1874,8 @@ export default function SettingsScreen({ navigation }) {
       >
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContainer, { height: 'auto', maxHeight: '50%' }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Article Age Filter</Text>
+            <View style={[styles.modalHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={styles.modalTitle}>{t('settings.articleAgeFilter')}</Text>
               <TouchableOpacity
                 onPress={() => setShowArticleAgePicker(false)}
                 style={styles.modalCloseButton}
@@ -1632,15 +1884,16 @@ export default function SettingsScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
-            <Text style={[styles.modeItemDesc, { paddingHorizontal: 16, paddingBottom: 8 }]}>
-              Filter out articles older than the selected period when refreshing feeds.
+            <Text style={[styles.modeItemDesc, { paddingHorizontal: 16, paddingBottom: 8, textAlign: isRTL ? 'right' : 'left' }]}>
+              {t('settings.articleAgeFilterModalDesc')}
             </Text>
 
             {articleAgeOptions.map((option, index) => (
               <TouchableOpacity
                 key={option.value}
                 style={[
-                  styles.modeItem, 
+                  styles.modeItem,
+                  { flexDirection: isRTL ? 'row-reverse' : 'row' },
                   maxArticleAge === option.value && styles.langItemSelected,
                   index === articleAgeOptions.length - 1 && { borderBottomWidth: 0 },
                 ]}
@@ -1649,14 +1902,14 @@ export default function SettingsScreen({ navigation }) {
                   setShowArticleAgePicker(false);
                 }}
               >
-                <View style={styles.modeItemContent}>
-                  <Ionicons 
-                    name={option.value === 0 ? 'infinite-outline' : 'time-outline'} 
-                    size={22} 
-                    color={maxArticleAge === option.value ? theme.colors.primary : theme.colors.text} 
+                <View style={[styles.modeItemContent, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                  <Ionicons
+                    name={option.value === 0 ? 'infinite-outline' : 'time-outline'}
+                    size={22}
+                    color={maxArticleAge === option.value ? theme.colors.primary : theme.colors.text}
                   />
                   <View style={styles.modeItemText}>
-                    <Text style={[styles.modeItemTitle, maxArticleAge === option.value && { color: theme.colors.primary }]}>
+                    <Text style={[styles.modeItemTitle, { textAlign: isRTL ? 'right' : 'left' }, maxArticleAge === option.value && { color: theme.colors.primary }]}>
                       {option.label}
                     </Text>
                   </View>
@@ -1670,6 +1923,129 @@ export default function SettingsScreen({ navigation }) {
         </View>
       </Modal>
 
+      {/* Auto-Scroll Delay Picker Modal */}
+      <Modal
+        visible={showAutoScrollDelayPicker}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowAutoScrollDelayPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContainer, { height: 'auto', maxHeight: '50%' }]}>
+            <View style={[styles.modalHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={styles.modalTitle}>{t('settings.autoScrollDelay')}</Text>
+              <TouchableOpacity
+                onPress={() => setShowAutoScrollDelayPicker(false)}
+                style={styles.modalCloseButton}
+              >
+                <Ionicons name="close" size={24} color={theme.colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            {[3, 5, 10, 15].map((seconds, index, arr) => (
+              <TouchableOpacity
+                key={seconds}
+                style={[
+                  styles.modeItem,
+                  { flexDirection: isRTL ? 'row-reverse' : 'row' },
+                  autoScrollDelay === seconds && styles.langItemSelected,
+                  index === arr.length - 1 && { borderBottomWidth: 0 },
+                ]}
+                onPress={() => {
+                  updateAutoScrollDelay(seconds);
+                  setShowAutoScrollDelayPicker(false);
+                }}
+              >
+                <View style={[styles.modeItemContent, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                  <Ionicons
+                    name="timer-outline"
+                    size={22}
+                    color={autoScrollDelay === seconds ? theme.colors.primary : theme.colors.text}
+                  />
+                  <View style={styles.modeItemText}>
+                    <Text style={[styles.modeItemTitle, { textAlign: isRTL ? 'right' : 'left' }, autoScrollDelay === seconds && { color: theme.colors.primary }]}>
+                      {t('settings.autoScrollDelayValue', { count: formatNumber(seconds) })}
+                    </Text>
+                  </View>
+                </View>
+                {autoScrollDelay === seconds && (
+                  <Ionicons name="checkmark" size={20} color={theme.colors.primary} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Reading Font Picker Modal */}
+      <Modal
+        visible={showFontPicker}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowFontPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContainer, { height: 'auto', maxHeight: '70%' }]}>
+            <View style={[styles.modalHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={styles.modalTitle}>{t('settings.readingFont')}</Text>
+              <TouchableOpacity onPress={() => setShowFontPicker(false)} style={styles.modalCloseButton}>
+                <Ionicons name="close" size={24} color={theme.colors.text} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView>
+              {READING_FONTS.map((font, index, arr) => (
+                <TouchableOpacity
+                  key={font.key}
+                  style={[
+                    styles.modeItem,
+                    { flexDirection: isRTL ? 'row-reverse' : 'row' },
+                    readingFont === font.key && styles.langItemSelected,
+                    index === arr.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                  onPress={() => {
+                    updateReadingFont(font.key);
+                    setShowFontPicker(false);
+                  }}
+                >
+                  <View style={[styles.modeItemContent, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+                    <Ionicons
+                      name="text-outline"
+                      size={22}
+                      color={readingFont === font.key ? theme.colors.primary : theme.colors.text}
+                    />
+                    <View style={styles.modeItemText}>
+                      <Text
+                        style={[
+                          styles.modeItemTitle,
+                          { textAlign: isRTL ? 'right' : 'left' },
+                          readingFontStyle(font.key),
+                          readingFont === font.key && { color: theme.colors.primary },
+                        ]}
+                      >
+                        {font.label || t(font.labelKey)}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.settingDescription,
+                          { color: theme.colors.textSecondary, textAlign: isRTL ? 'right' : 'left' },
+                          readingFontStyle(font.key),
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {t('settings.fontPreview')}
+                      </Text>
+                    </View>
+                  </View>
+                  {readingFont === font.key && (
+                    <Ionicons name="checkmark" size={20} color={theme.colors.primary} />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       {/* Widget Theme Picker Modal */}
       <Modal
         visible={showWidgetThemePicker}
@@ -1679,8 +2055,8 @@ export default function SettingsScreen({ navigation }) {
       >
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContainer, { height: 'auto', maxHeight: '50%' }]}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Widget Theme</Text>
+            <View style={[styles.modalHeader, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
+              <Text style={styles.modalTitle}>{t('settings.widgetTheme')}</Text>
               <TouchableOpacity
                 onPress={() => setShowWidgetThemePicker(false)}
                 style={styles.modalCloseButton}
@@ -1690,30 +2066,31 @@ export default function SettingsScreen({ navigation }) {
             </View>
 
             {[
-              { value: 'app', label: 'App Theme', desc: 'Follow the app\'s light/dark setting', icon: 'phone-portrait-outline' },
-              { value: 'light', label: 'Light', desc: 'Always use light colors', icon: 'sunny-outline' },
-              { value: 'dark', label: 'Dark', desc: 'Always use dark colors', icon: 'moon-outline' },
+              { value: 'app', label: t('settings.widgetThemeApp'), desc: t('settings.widgetThemeAppDesc'), icon: 'phone-portrait-outline' },
+              { value: 'light', label: t('settings.widgetThemeLight'), desc: t('settings.widgetThemeLightDesc'), icon: 'sunny-outline' },
+              { value: 'dark', label: t('settings.widgetThemeDark'), desc: t('settings.widgetThemeDarkDesc'), icon: 'moon-outline' },
             ].map((option, index) => (
               <TouchableOpacity
                 key={option.value}
                 style={[
                   styles.modeItem,
+                  { flexDirection: isRTL ? 'row-reverse' : 'row' },
                   widgetTheme === option.value && styles.langItemSelected,
                   index === 2 && { borderBottomWidth: 0 },
                 ]}
                 onPress={() => handleWidgetThemeChange(option.value)}
               >
-                <View style={styles.modeItemContent}>
+                <View style={[styles.modeItemContent, { flexDirection: isRTL ? 'row-reverse' : 'row' }]}>
                   <Ionicons
                     name={option.icon}
                     size={22}
                     color={widgetTheme === option.value ? theme.colors.primary : theme.colors.text}
                   />
                   <View style={styles.modeItemText}>
-                    <Text style={[styles.modeItemTitle, widgetTheme === option.value && { color: theme.colors.primary }]}>
+                    <Text style={[styles.modeItemTitle, { textAlign: isRTL ? 'right' : 'left' }, widgetTheme === option.value && { color: theme.colors.primary }]}>
                       {option.label}
                     </Text>
-                    <Text style={styles.modeItemDesc}>{option.desc}</Text>
+                    <Text style={[styles.modeItemDesc, { textAlign: isRTL ? 'right' : 'left' }]}>{option.desc}</Text>
                   </View>
                 </View>
                 {widgetTheme === option.value && (

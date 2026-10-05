@@ -15,6 +15,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useFeed } from '../context/FeedContext';
 import { useAmbientSound } from '../context/AmbientSoundContext';
+import { useTranslation } from '../context/LanguageContext';
+import { formatLocalizedDate } from '../utils/formatDate';
 import SaveButton from '../components/SaveButton';
 
 export default function ArticleActionsScreen({ route, navigation }) {
@@ -22,6 +24,7 @@ export default function ArticleActionsScreen({ route, navigation }) {
   const { theme } = useTheme();
   const { markArticleRead } = useFeed();
   const { setShowPlaylist: openSoundPlaylist } = useAmbientSound();
+  const { t, isRTL, formatNumber, language } = useTranslation();
 
   
   // Track if we've already marked this article as read to prevent infinite loops
@@ -60,7 +63,7 @@ export default function ArticleActionsScreen({ route, navigation }) {
   const handleShare = async () => {
     try {
       const shareOptions = {
-        message: Platform.OS === 'ios' ? `📰 Shared via FeedWell\n\n${article.title}` : `📰 Shared via FeedWell\n\n${article.title}\n\n${article.url}`,
+        message: Platform.OS === 'ios' ? `📰 ${t('articleActions.sharedVia')}\n\n${article.title}` : `📰 ${t('articleActions.sharedVia')}\n\n${article.title}\n\n${article.url}`,
         url: Platform.OS === 'ios' ? article.url : undefined,
         title: article.title,
       };
@@ -71,16 +74,11 @@ export default function ArticleActionsScreen({ route, navigation }) {
     }
   };
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const formatDate = (dateString) => formatLocalizedDate(dateString, language, formatNumber, {
+    withYear: true,
+    withTime: true,
+    localeOptions: { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' },
+  });
 
   const styles = StyleSheet.create({
     container: {
@@ -88,7 +86,7 @@ export default function ArticleActionsScreen({ route, navigation }) {
       backgroundColor: theme.colors.background,
     },
     header: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
       paddingHorizontal: 12,
@@ -118,7 +116,7 @@ export default function ArticleActionsScreen({ route, navigation }) {
       color: theme.colors.textSecondary,
     },
     headerActions: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       alignItems: 'center',
     },
     headerTitle: {
@@ -138,10 +136,14 @@ export default function ArticleActionsScreen({ route, navigation }) {
       color: theme.colors.primary,
       fontWeight: '600',
       marginBottom: 4,
+      textAlign: isRTL ? 'right' : 'left',
+      writingDirection: isRTL ? 'rtl' : 'ltr',
     },
     articleDate: {
       fontSize: 12,
       color: theme.colors.textSecondary,
+      textAlign: isRTL ? 'right' : 'left',
+      writingDirection: isRTL ? 'rtl' : 'ltr',
     },
     articleTitle: {
       fontSize: 24,
@@ -149,6 +151,8 @@ export default function ArticleActionsScreen({ route, navigation }) {
       color: theme.colors.text,
       lineHeight: 32,
       marginBottom: 16,
+      textAlign: isRTL ? 'right' : 'left',
+      writingDirection: isRTL ? 'rtl' : 'ltr',
     },
     articleImage: {
       width: '100%',
@@ -162,13 +166,15 @@ export default function ArticleActionsScreen({ route, navigation }) {
       color: theme.colors.textSecondary,
       lineHeight: 24,
       marginBottom: 24,
+      textAlign: isRTL ? 'right' : 'left',
+      writingDirection: isRTL ? 'rtl' : 'ltr',
     },
     actionsContainer: {
       gap: 12,
       paddingVertical: 16,
     },
     actionButton: {
-      flexDirection: 'row',
+      flexDirection: isRTL ? 'row-reverse' : 'row',
       alignItems: 'center',
       justifyContent: 'center',
       padding: 16,
@@ -242,29 +248,29 @@ export default function ArticleActionsScreen({ route, navigation }) {
   });
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView edges={["top", "left", "right"]} style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
           onPress={() => navigation.goBack()}
         >
-          <Ionicons name="arrow-back" size={20} color={theme.colors.text} />
-          <Text style={styles.headerButtonLabel}>Back</Text>
+          <Ionicons name={isRTL ? "arrow-forward" : "arrow-back"} size={20} color={theme.colors.text} />
+          <Text style={styles.headerButtonLabel}>{t('articleActions.back')}</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Article</Text>
+        <Text style={styles.headerTitle}>{t('articleActions.headerTitle')}</Text>
         <View style={styles.headerActions}>
           <TouchableOpacity style={styles.headerButton} onPress={handleOpenInBrowser}>
             <Ionicons name="globe-outline" size={20} color={theme.colors.text} />
-            <Text style={styles.headerButtonLabel}>Browser</Text>
+            <Text style={styles.headerButtonLabel}>{t('articleActions.browser')}</Text>
           </TouchableOpacity>
-          <SaveButton article={article} size={20} variant="header" label="Save" />
+          <SaveButton article={article} size={20} variant="header" label={t('common.save')} />
           <TouchableOpacity style={styles.headerButton} onPress={handleShare}>
             <Ionicons name="share-outline" size={20} color={theme.colors.text} />
-            <Text style={styles.headerButtonLabel}>Share</Text>
+            <Text style={styles.headerButtonLabel}>{t('articleActions.share')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.headerButton} onPress={() => openSoundPlaylist(true)}>
             <Ionicons name="musical-notes-outline" size={20} color={theme.colors.text} />
-            <Text style={styles.headerButtonLabel}>Sounds</Text>
+            <Text style={styles.headerButtonLabel}>{t('articleActions.sounds')}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -295,7 +301,7 @@ export default function ArticleActionsScreen({ route, navigation }) {
             onPress={handleOpenInBrowser}
           >
             <Ionicons name="globe-outline" size={24} color="#fff" />
-            <Text style={styles.actionButtonText}>Open in Browser</Text>
+            <Text style={styles.actionButtonText}>{t('articleActions.openInBrowser')}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -303,7 +309,7 @@ export default function ArticleActionsScreen({ route, navigation }) {
             onPress={handleReadInApp}
           >
             <Ionicons name="reader-outline" size={24} color="#fff" />
-            <Text style={styles.actionButtonText}>Read in App</Text>
+            <Text style={styles.actionButtonText}>{t('articleActions.readInApp')}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -311,7 +317,7 @@ export default function ArticleActionsScreen({ route, navigation }) {
             onPress={handleShare}
           >
             <Ionicons name="share-outline" size={24} color="#fff" />
-            <Text style={styles.actionButtonText}>Share</Text>
+            <Text style={styles.actionButtonText}>{t('articleActions.share')}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
