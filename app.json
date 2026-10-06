@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "FeedWell",
-    "slug": "feedwell",
+    "name": "FeedWell Edge",
+    "slug": "feedwell-edge",
     "version": "2.1.0",
     "sdkVersion": "54.0.0",
     "orientation": "default",
@@ -15,7 +15,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.feedwell.app",
+      "bundleIdentifier": "com.feedwelledge.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -27,7 +27,7 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.feedwell.app",
+      "package": "com.feedwelledge.app",
       "permissions": [
         "INTERNET",
         "ACCESS_NETWORK_STATE",
@@ -46,7 +46,7 @@
         "projectId": "828c0ad5-fd9a-436a-b2da-1b50fb4d4960"
       }
     },
-    "scheme": "feedwell",
+    "scheme": "feedwelledge",
     "plugins": [
       "expo-font",
       [

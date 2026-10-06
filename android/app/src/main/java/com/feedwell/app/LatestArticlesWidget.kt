@@ -20,10 +20,10 @@ import org.json.JSONObject
 class LatestArticlesWidget : AppWidgetProvider() {
 
     companion object {
-        const val ACTION_NEXT = "com.feedwell.app.WIDGET_NEXT"
-        const val ACTION_PREV = "com.feedwell.app.WIDGET_PREV"
-        const val ACTION_OPEN = "com.feedwell.app.WIDGET_OPEN"
-        const val ACTION_REFRESH = "com.feedwell.app.WIDGET_REFRESH"
+        const val ACTION_NEXT = "com.feedwelledge.app.WIDGET_NEXT"
+        const val ACTION_PREV = "com.feedwelledge.app.WIDGET_PREV"
+        const val ACTION_OPEN = "com.feedwelledge.app.WIDGET_OPEN"
+        const val ACTION_REFRESH = "com.feedwelledge.app.WIDGET_REFRESH"
         const val PREFS_NAME = "FeedWellWidgetPrefs"
         const val KEY_ARTICLES = "widget_articles"
         const val KEY_CURRENT_INDEX = "widget_current_index"
@@ -154,10 +154,10 @@ class LatestArticlesWidget : AppWidgetProvider() {
                 val articleDate = intent.getStringExtra("article_date") ?: ""
 
                 if (!articleUrl.isNullOrEmpty()) {
-                    // Use ACTION_VIEW with the feedwell:// scheme so Android delivers it as a
+                    // Use ACTION_VIEW with the feedwelledge:// scheme so Android delivers it as a
                     // deep link to MainActivity and React Native's Linking module picks it up.
                     val deepLinkIntent = Intent(Intent.ACTION_VIEW).apply {
-                        val uriStr = "feedwell://article?url=${Uri.encode(articleUrl)}&title=${Uri.encode(articleTitle)}&feed=${Uri.encode(articleFeed)}&date=${Uri.encode(articleDate)}"
+                        val uriStr = "feedwelledge://article?url=${Uri.encode(articleUrl)}&title=${Uri.encode(articleTitle)}&feed=${Uri.encode(articleFeed)}&date=${Uri.encode(articleDate)}"
                         data = Uri.parse(uriStr)
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                         setPackage(context.packageName)
@@ -282,7 +282,7 @@ class LatestArticlesWidget : AppWidgetProvider() {
 
         // Header controls shrink with the width. The app name keeps its weight even
         // when blanked, so the buttons stay pinned to the end of the row.
-        views.setTextViewText(R.id.widget_app_name, if (widthDp >= WIDTH_APP_NAME) "FeedWell" else "")
+        views.setTextViewText(R.id.widget_app_name, if (widthDp >= WIDTH_APP_NAME) "FeedWell Edge" else "")
         views.setViewVisibility(R.id.widget_prev_button, if (widthDp >= WIDTH_PREV_BUTTON) View.VISIBLE else View.GONE)
         var showRefresh = true
 

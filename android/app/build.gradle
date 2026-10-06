@@ -99,7 +99,7 @@ android {
 
     namespace 'com.feedwell.app'
     defaultConfig {
-        applicationId 'com.feedwell.app'
+        applicationId 'com.feedwelledge.app'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode appVersionCode
