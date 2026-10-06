@@ -92,7 +92,7 @@ cd android
 
 The research track uses the 2.x line and is developed apart from the Play Store app (FeedWell 1.x).
 
-- **2.1.0**: code base moved to FeedWell 1.18.2 (October 2026). The on-device learning layer of 2.0.5 is carried over unchanged.
+- **2.1.0**: code base moved to FeedWell 1.18.2 (October 2026). The on-device learning layer of 2.0.5 is carried over unchanged. The app is installed as `com.feedwelledge.app` (name "FeedWell Edge", deep links `feedwelledge://`), so it sits next to the Play Store FeedWell on the same phone. The Kotlin package stays `com.feedwell.app`.
 - **2.0.1 to 2.0.5**: event pipeline, topic-weight learner, drift detection, ranking and telemetry export, on FeedWell 1.6.22.
 
 Version sync script:

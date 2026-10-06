@@ -36,7 +36,7 @@
         <action android:name="android.intent.action.VIEW"/>
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="feedwell"/>
+        <data android:scheme="feedwelledge"/>
       </intent-filter>
     </activity>
     <receiver
@@ -44,9 +44,9 @@
         android:exported="true">
       <intent-filter>
         <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-        <action android:name="com.feedwell.app.WIDGET_NEXT" />
-        <action android:name="com.feedwell.app.WIDGET_PREV" />
-        <action android:name="com.feedwell.app.WIDGET_OPEN" />
+        <action android:name="com.feedwelledge.app.WIDGET_NEXT" />
+        <action android:name="com.feedwelledge.app.WIDGET_PREV" />
+        <action android:name="com.feedwelledge.app.WIDGET_OPEN" />
       </intent-filter>
       <meta-data
           android:name="android.appwidget.provider"

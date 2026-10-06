@@ -66,7 +66,7 @@ function handleDeepLink(url) {
   }
   pendingDeepLinkUrl = null;
   try {
-    if (url.startsWith('feedwell://article')) {
+    if (url.startsWith('feedwelledge://article')) {
       try {
         const parsed = new URL(url);
         const articleUrl = parsed.searchParams.get('url') || '';
