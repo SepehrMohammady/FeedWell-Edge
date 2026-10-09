@@ -94,7 +94,28 @@ function buildArticleSnapshot(article = {}) {
     feedTitle: article.feedTitle || null,
     topic: getTopicFromArticle(article),
     publishedDate: article.publishedDate || article.pubDate || null,
+    // the title feeds the on-device encoder's history (contentRanker.js); older events have none
+    title: typeof article.title === 'string' ? article.title.slice(0, 300) : null,
   };
+}
+
+// Titles of the most recently opened or read articles, newest last, one per article. Events recorded
+// before titles were stored fall back to the articles still in the feed (`articles`).
+export async function getRecentReadTitles(limit = 50, articles = []) {
+  const events = await readJson(STORAGE_KEYS.EVENTS, []);
+  const titleById = new Map(articles.map((a) => [a.id, a.title]));
+  const seen = new Set();
+  const titles = [];
+  for (let i = events.length - 1; i >= 0 && titles.length < limit; i -= 1) {
+    const evt = events[i];
+    if (evt?.type !== 'open' && evt?.type !== 'read_session') continue;
+    const id = evt?.article?.id;
+    if (id == null || seen.has(id)) continue;
+    seen.add(id);
+    const title = evt.article.title || titleById.get(id);
+    if (typeof title === 'string' && title.trim()) titles.push(title);
+  }
+  return titles.reverse();
 }
 
 function buildRankingProfile(state = createDefaultModelState()) {
@@ -133,6 +154,8 @@ export async function recordImpression(article, context = {}) {
       titleLength: context.titleLength ?? null,
       hasImage: context.hasImage ?? null,
       language: context.language ?? null,
+      contentScore: context.contentScore ?? null,
+      contentWeight: context.contentWeight ?? null,
     },
   });
 }
@@ -150,6 +173,8 @@ export async function recordOpen(article, context = {}) {
       action: context.action ?? 'preview', // 'preview' or 'read_in_app' or 'browser'
       titleLength: context.titleLength ?? null,
       language: context.language ?? null,
+      contentScore: context.contentScore ?? null,
+      contentWeight: context.contentWeight ?? null,
     },
   });
 }

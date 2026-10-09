@@ -11,6 +11,7 @@ const MODELS = {
   fp32: require('../../assets/models/edge_encoder_v1/news_encoder_fp32.onnx'),
 };
 const BYTE_TABLE = require('../../assets/models/edge_encoder_v1/byte_table.f32');
+const USER_ENCODER = require('../../assets/models/edge_encoder_v1/user_encoder.onnx');
 
 async function localUri(moduleId) {
   const asset = Asset.fromModule(moduleId);
@@ -40,9 +41,14 @@ function cosine(a, b) {
   return aa && bb ? ab / Math.sqrt(aa * bb) : 1;
 }
 
-// Compare the phone's vectors with the laptop's for the test titles (same ONNX Runtime version, 1.27.0).
+// Compare the phone's vectors with the laptop's for the test titles (same ONNX Runtime version, 1.27.0),
+// and the content scores of the test candidates for the test history (user encoder on the phone, PyTorch on
+// the laptop).
 export async function validateOnDevice() {
   const out = {};
+  await EdgeEncoder.loadUserEncoder(await localUri(USER_ENCODER));
+  const historyTitles = testVectors.history.map((i) => testVectors.titles[i]);
+  const candidateTitles = testVectors.candidates.map((i) => testVectors.titles[i]);
   for (const kind of ['int8', 'fp32']) {
     await loadEncoder(kind, 0, `check_${kind}`);
     const phone = await encodeTitles(testVectors.titles, `check_${kind}`);
@@ -53,7 +59,11 @@ export async function validateOnDevice() {
       v.forEach((x, j) => { maxAbs = Math.max(maxAbs, Math.abs(x - ref[i][j])); });
       if (testVectors.titles[i]) minCos = Math.min(minCos, cosine(v, ref[i]));
     });
-    out[kind] = { titles: phone.length, maxAbsDiff: maxAbs, minCosine: minCos };
+    const content = await EdgeEncoder.contentScores(`check_${kind}`, historyTitles, candidateTitles);
+    const refScores = testVectors.candidate_scores[`onnx_${kind}`];
+    const scoreDiff = Math.max(...content.scores.map((x, i) => Math.abs(x - refScores[i])));
+    out[kind] = { titles: phone.length, maxAbsDiff: maxAbs, minCosine: minCos,
+                  contentScores: content.scores, contentScoresMaxAbsDiff: scoreDiff, contentMs: content.ms };
   }
   return out;
 }

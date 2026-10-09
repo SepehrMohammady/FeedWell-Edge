@@ -24,7 +24,8 @@ import SaveButton from '../components/SaveButton';
 import ReadingPositionIndicator from '../components/ReadingPositionIndicator';
 import CustomAlert from '../components/CustomAlert';
 import { useAmbientSound } from '../context/AmbientSoundContext';
-import { getFeedRankingProfile, recordImpression, recordOpen, runContinualLearningStep, purgeExpiredEvents, scoreArticleForRanking } from '../edgeml/localLearningService';
+import { getFeedRankingProfile, getRecentReadTitles, recordImpression, recordOpen, runContinualLearningStep, purgeExpiredEvents, scoreArticleForRanking } from '../edgeml/localLearningService';
+import { computeContentScores } from '../edgeml/contentRanker';
 import { useTranslation } from '../context/LanguageContext';
 import { formatRelativeDate } from '../utils/formatDate';
 import { useAutoScroll } from '../hooks/useAutoScroll';
@@ -35,7 +36,7 @@ export default function FeedListScreen({ navigation, route }) {
   const { feeds, articles, loading, addArticles, setLoading, setError, markAllRead, markAllUnread, markArticlesRead, markArticleRead, markArticleUnread, getUnreadCount, getReadCount, readingPosition, setReadingPosition, clearReadingPosition } = useFeed();
   const { theme } = useTheme();
   const { t, isRTL, formatNumber, language } = useTranslation();
-  const { showImages, articleFilter, sortOrder, updateArticleFilter, updateSortOrder, maxArticleAge, skipArticleView, showReadingPositionInFeeds, autoScrollEnabled, autoScrollDelay, autoScrollSpeed, keepAwakeEnabled, onDeviceLearningEnabled, onDeviceLearningRetentionDays } = useAppSettings();
+  const { showImages, articleFilter, sortOrder, updateArticleFilter, updateSortOrder, maxArticleAge, skipArticleView, showReadingPositionInFeeds, autoScrollEnabled, autoScrollDelay, autoScrollSpeed, keepAwakeEnabled, onDeviceLearningEnabled, onDeviceLearningRetentionDays, contentRankingEnabled, contentRankingWeight } = useAppSettings();
   const { setShowPlaylist: openSoundPlaylist } = useAmbientSound();
   const [refreshing, setRefreshing] = useState(false);
   const [forceRender, setForceRender] = useState(0);
@@ -43,6 +44,9 @@ export default function FeedListScreen({ navigation, route }) {
   const [selectedArticles, setSelectedArticles] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [rankingProfile, setRankingProfile] = useState({ topicWeights: {}, topicSignals: {}, flaggedTopics: [], updatedAt: null });
+  // Content scores of the on-device encoder (z-scores within the list), kept in a ref too for the event logs.
+  const [contentScores, setContentScores] = useState(null);
+  const contentScoresRef = useRef(null);
   const flatListRef = useRef(null);
   // Last measured average item length reported by the FlatList (via
   // onScrollToIndexFailed). Used instead of a hardcoded height estimate.
@@ -123,6 +127,23 @@ export default function FeedListScreen({ navigation, route }) {
         if (active) {
           setRankingProfile(profile);
         }
+
+        // Content-aware ranking: encoder similarity between each title and the user's recent reads.
+        if (!contentRankingEnabled || sortOrder !== 'newest' || articles.length === 0) {
+          contentScoresRef.current = null;
+          if (active) setContentScores(null);
+          return;
+        }
+        try {
+          const history = await getRecentReadTitles(50, articles);
+          const result = await computeContentScores(articles, history);
+          if (active) {
+            contentScoresRef.current = result.scores;
+            setContentScores(result.scores);
+          }
+        } catch (error) {
+          console.warn('[EdgeML] content ranking failed:', error?.message || error);
+        }
       };
 
       loadRankingProfile();
@@ -130,7 +151,7 @@ export default function FeedListScreen({ navigation, route }) {
       return () => {
         active = false;
       };
-    }, [onDeviceLearningEnabled, forceRender, articles.length])
+    }, [onDeviceLearningEnabled, contentRankingEnabled, sortOrder, forceRender, articles])
   );
 
   // Force re-render when screen comes into focus to update read status
@@ -343,6 +364,8 @@ export default function FeedListScreen({ navigation, route }) {
         filter: articleFilter,
         sortOrder,
         source: skipArticleView ? 'feed_to_reader' : 'feed_to_actions',
+        contentScore: contentScoresRef.current?.get(article.id) ?? null,
+        contentWeight: contentRankingEnabled ? contentRankingWeight : 0,
       }).then(() => runContinualLearningStep());
     }
 
@@ -692,7 +715,11 @@ export default function FeedListScreen({ navigation, route }) {
     // pass so the comparator stays consistent.
     const personalised = onDeviceLearningEnabled && sortOrder === 'newest';
     const scoreOf = personalised
-      ? new Map(filtered.map(article => [article.id, scoreArticleForRanking(article, rankingProfile)]))
+      ? new Map(filtered.map(article => [
+          article.id,
+          scoreArticleForRanking(article, rankingProfile)
+            + (contentRankingEnabled && contentScores ? contentRankingWeight * (contentScores.get(article.id) || 0) : 0),
+        ]))
       : null;
     const sortedArticles = filtered.sort((a, b) => {
       if (personalised) {
@@ -733,9 +760,11 @@ export default function FeedListScreen({ navigation, route }) {
         filter: articleFilter,
         sortOrder,
         source: 'feed_list',
+        contentScore: contentScoresRef.current?.get(article.id) ?? null,
+        contentWeight: contentRankingEnabled ? contentRankingWeight : 0,
       });
     });
-  }, [onDeviceLearningEnabled, articleFilter, sortOrder]);
+  }, [onDeviceLearningEnabled, articleFilter, sortOrder, contentRankingEnabled, contentRankingWeight]);
 
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
 

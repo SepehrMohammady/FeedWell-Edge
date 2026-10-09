@@ -29,7 +29,9 @@ export default function EncoderLabModal({ visible, onClose, theme }) {
     const r = await validateOnDevice();
     const path = saveResult(`check_${stamp()}`, r);
     append(`check: int8 max|d| ${r.int8.maxAbsDiff.toExponential(2)} cos ${r.int8.minCosine.toFixed(6)}; `
-      + `fp32 max|d| ${r.fp32.maxAbsDiff.toExponential(2)} cos ${r.fp32.minCosine.toFixed(6)} -> ${path}`);
+      + `fp32 max|d| ${r.fp32.maxAbsDiff.toExponential(2)} cos ${r.fp32.minCosine.toFixed(6)}; `
+      + `content scores max|d| int8 ${r.int8.contentScoresMaxAbsDiff.toExponential(2)} `
+      + `fp32 ${r.fp32.contentScoresMaxAbsDiff.toExponential(2)} -> ${path}`);
   });
 
   const onLatency = () => run('latency', async () => {
