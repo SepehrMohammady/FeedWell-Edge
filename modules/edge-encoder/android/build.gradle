@@ -1,0 +1,20 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.feedwelledge'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.edgeencoder"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+}
+
+dependencies {
+  // Same ONNX Runtime version as the evaluation of the model files on the laptop (MIND, paper/results/int8_export.json)
+  implementation "com.microsoft.onnxruntime:onnxruntime-android:1.27.0"
+}
