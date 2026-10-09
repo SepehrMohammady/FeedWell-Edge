@@ -1,0 +1,8 @@
+{
+  "name": "edge-encoder",
+  "version": "0.1.0",
+  "description": "On-device byte-level news encoder (ONNX Runtime) and battery readings for FeedWell Edge research builds",
+  "main": "index.js",
+  "license": "MIT",
+  "private": true
+}

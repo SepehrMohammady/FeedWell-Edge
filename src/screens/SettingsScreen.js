@@ -51,6 +51,7 @@ import {
   deleteModel,
 } from '../utils/translationService';
 import { clearAllLocalLearningData, getLocalLearningSummary, getLocalLearningTelemetrySnapshot, purgeExpiredEvents } from '../edgeml/localLearningService';
+import EncoderLabModal from './EncoderLabModal';
 
 // "More from SeMo Lab" — the other apps, alphabetical. Names are brands and stay
 // untranslated; descriptions are localized.
@@ -73,6 +74,7 @@ export default function SettingsScreen({ navigation }) {
   const tour = useTour();
   const tourHeaderRef = useTourTarget('settings.header');
   const [showAppLangPicker, setShowAppLangPicker] = useState(false);
+  const [showEncoderLab, setShowEncoderLab] = useState(false);
 
   // Translation settings state
   const [targetLangCode, setTargetLangCode] = useState('en');
@@ -1481,6 +1483,12 @@ export default function SettingsScreen({ navigation }) {
             rightElement={<Ionicons name="document-text-outline" size={20} color={theme.colors.primary} />}
           />
           <SettingItem
+            title="On-device Encoder (research)"
+            description="Check, time and battery-test the byte-level news encoder"
+            onPress={() => setShowEncoderLab(true)}
+            rightElement={<Ionicons name="hardware-chip-outline" size={20} color={theme.colors.primary} />}
+          />
+          <SettingItem
             title="Reset Local Learning"
             description="Delete local events and learned weights on this device"
             onPress={handleClearLearningData}
@@ -1561,6 +1569,8 @@ export default function SettingsScreen({ navigation }) {
           </Text>
         </View>
       </ScrollView>
+
+      <EncoderLabModal visible={showEncoderLab} onClose={() => setShowEncoderLab(false)} theme={theme} />
 
 
       {/* Default Language Picker Modal */}

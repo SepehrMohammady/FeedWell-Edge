@@ -1,0 +1,7 @@
+expo.modules.edgeencoder.edge-encoder-pngs-0 C:\Projects\PhD\FeedWell-Edge\modules\edge-encoder\android\build\generated\res\pngs\release
+expo.modules.edgeencoder.edge-encoder-resValues-1 C:\Projects\PhD\FeedWell-Edge\modules\edge-encoder\android\build\generated\res\resValues\release
+expo.modules.edgeencoder.edge-encoder-mergeReleaseResources-2 C:\Projects\PhD\FeedWell-Edge\modules\edge-encoder\android\build\intermediates\incremental\release\mergeReleaseResources\merged.dir
+expo.modules.edgeencoder.edge-encoder-mergeReleaseResources-3 C:\Projects\PhD\FeedWell-Edge\modules\edge-encoder\android\build\intermediates\incremental\release\mergeReleaseResources\stripped.dir
+expo.modules.edgeencoder.edge-encoder-release-4 C:\Projects\PhD\FeedWell-Edge\modules\edge-encoder\android\build\intermediates\merged_res\release\mergeReleaseResources
+expo.modules.edgeencoder.edge-encoder-main-5 C:\Projects\PhD\FeedWell-Edge\modules\edge-encoder\android\src\main\res
+expo.modules.edgeencoder.edge-encoder-release-6 C:\Projects\PhD\FeedWell-Edge\modules\edge-encoder\android\src\release\res
