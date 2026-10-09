@@ -23,6 +23,10 @@ export function AppSettingsProvider({ children }) {
   const [readingReminder, setReadingReminder] = useState(true);
   const [onDeviceLearningEnabled, setOnDeviceLearningEnabled] = useState(true);
   const [onDeviceLearningRetentionDays, setOnDeviceLearningRetentionDays] = useState(30);
+  // Content-aware ranking: the on-device byte-level encoder (src/edgeml/contentRanker.js) adds a
+  // similarity between each title and the titles the user read; the weight scales its z-score.
+  const [contentRankingEnabled, setContentRankingEnabled] = useState(true);
+  const [contentRankingWeight, setContentRankingWeight] = useState(1);
   // Local-feeds region for Popular Categories ('global' = English). When the user
   // hasn't explicitly chosen one, screens derive it from the app language.
   const [feedRegion, setFeedRegion] = useState('global');
@@ -73,6 +77,8 @@ export function AppSettingsProvider({ children }) {
       const savedReadingReminder = await AsyncStorage.getItem('readingReminder');
       const savedOnDeviceLearningEnabled = await AsyncStorage.getItem('onDeviceLearningEnabled');
       const savedOnDeviceLearningRetentionDays = await AsyncStorage.getItem('onDeviceLearningRetentionDays');
+      const savedContentRankingEnabled = await AsyncStorage.getItem('contentRankingEnabled');
+      const savedContentRankingWeight = await AsyncStorage.getItem('contentRankingWeight');
       const savedFeedRegion = await AsyncStorage.getItem('feedRegion');
       const savedFeedRegionUserSet = await AsyncStorage.getItem('feedRegionUserSet');
       const savedTranslationTargetUserSet = await AsyncStorage.getItem('translationTargetUserSet');
@@ -147,6 +153,14 @@ export function AppSettingsProvider({ children }) {
 
       if (savedOnDeviceLearningRetentionDays !== null) {
         setOnDeviceLearningRetentionDays(JSON.parse(savedOnDeviceLearningRetentionDays));
+      }
+
+      if (savedContentRankingEnabled !== null) {
+        setContentRankingEnabled(JSON.parse(savedContentRankingEnabled));
+      }
+
+      if (savedContentRankingWeight !== null) {
+        setContentRankingWeight(JSON.parse(savedContentRankingWeight));
       }
 
       if (savedFeedRegion !== null) {
@@ -443,6 +457,24 @@ export function AppSettingsProvider({ children }) {
     }
   };
 
+  const updateContentRankingEnabled = async (value) => {
+    try {
+      setContentRankingEnabled(value);
+      await AsyncStorage.setItem('contentRankingEnabled', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving contentRankingEnabled setting:', error);
+    }
+  };
+
+  const updateContentRankingWeight = async (value) => {
+    try {
+      setContentRankingWeight(value);
+      await AsyncStorage.setItem('contentRankingWeight', JSON.stringify(value));
+    } catch (error) {
+      console.error('Error saving contentRankingWeight setting:', error);
+    }
+  };
+
   const updateOnDeviceLearningRetentionDays = async (value) => {
     try {
       setOnDeviceLearningRetentionDays(value);
@@ -469,6 +501,8 @@ export function AppSettingsProvider({ children }) {
     readingReminder,
     onDeviceLearningEnabled,
     onDeviceLearningRetentionDays,
+    contentRankingEnabled,
+    contentRankingWeight,
     feedRegion,
     feedRegionUserSet,
     translationTargetUserSet,
@@ -508,6 +542,8 @@ export function AppSettingsProvider({ children }) {
     updateReadingReminder,
     updateOnDeviceLearningEnabled,
     updateOnDeviceLearningRetentionDays,
+    updateContentRankingEnabled,
+    updateContentRankingWeight,
   };
 
   return (

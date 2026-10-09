@@ -66,7 +66,7 @@ export default function SettingsScreen({ navigation }) {
   const { feeds, articles, clearAllData } = useFeed();
   const { theme, isDarkMode, toggleTheme, paletteIndex, setPalette, LIGHT_PALETTES, DARK_PALETTES, amoledBlack, toggleAmoledBlack } = useTheme();
   const { showImages, autoRefresh, showBookmarkIndicators, skipArticleView, showReadingPositionInFeeds, allowRotation, speechRate, readerHeaderActions, reduceMotion, readingReminder, updateShowImages, updateAutoRefresh, updateShowBookmarkIndicators, updateSkipArticleView, updateShowReadingPositionInFeeds, updateAllowRotation, updateSpeechRate, updateReaderHeaderActions, updateReduceMotion, updateReadingReminder, maxArticleAge, updateMaxArticleAge, autoScrollEnabled, autoScrollDelay, autoScrollSpeed, updateAutoScrollEnabled, updateAutoScrollDelay, updateAutoScrollSpeed, keepAwakeEnabled, updateKeepAwakeEnabled, autoTranslate, updateAutoTranslate } = useAppSettings();
-  const { feedRegionUserSet, updateFeedRegion, translationTargetUserSet, markTranslationTargetUserSet, readingFont, updateReadingFont, onDeviceLearningEnabled, onDeviceLearningRetentionDays, updateOnDeviceLearningEnabled, updateOnDeviceLearningRetentionDays } = useAppSettings();
+  const { feedRegionUserSet, updateFeedRegion, translationTargetUserSet, markTranslationTargetUserSet, readingFont, updateReadingFont, onDeviceLearningEnabled, onDeviceLearningRetentionDays, updateOnDeviceLearningEnabled, updateOnDeviceLearningRetentionDays, contentRankingEnabled, contentRankingWeight, updateContentRankingEnabled, updateContentRankingWeight } = useAppSettings();
   const { articles: readLaterArticles } = useReadLater();
   const { autoPlay, setAutoPlay, currentSound } = useAmbientSound();
   const { t, language, setLanguage, isRTL, formatNumber } = useTranslation();
@@ -1458,6 +1458,28 @@ export default function SettingsScreen({ navigation }) {
                 thumbColor={onDeviceLearningEnabled ? '#fff' : '#f4f3f4'}
               />
             }
+          />
+          <SettingItem
+            title="Content-aware Ranking"
+            description="Rank articles also by how close their titles are to what you read (on-device encoder)"
+            rightElement={
+              <Switch
+                value={contentRankingEnabled}
+                onValueChange={updateContentRankingEnabled}
+                trackColor={{ false: '#767577', true: theme.colors.primary }}
+                thumbColor={contentRankingEnabled ? '#fff' : '#f4f3f4'}
+              />
+            }
+          />
+          <SettingItem
+            title="Content Weight"
+            description={`Weight of the title similarity in the ranking: ${contentRankingWeight}`}
+            onPress={() => {
+              const steps = [0.5, 1, 2, 4];
+              const i = steps.indexOf(contentRankingWeight);
+              updateContentRankingWeight(steps[(i + 1) % steps.length]);
+            }}
+            rightElement={<Ionicons name="swap-horizontal-outline" size={20} color={theme.colors.primary} />}
           />
           <SettingItem
             title="Retention"

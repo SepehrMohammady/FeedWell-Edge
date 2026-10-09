@@ -80,6 +80,41 @@ class EdgeEncoderModule : Module() {
       )
     }
 
+    // User encoder of the same checkpoint (additive attention over the history's news vectors).
+    AsyncFunction("loadUserEncoder") { modelPath: String ->
+      synchronized(this@EdgeEncoderModule) {
+        userSession?.close()
+        userSession = env.createSession(path(modelPath), OrtSession.SessionOptions())
+      }
+      true
+    }
+
+    // Content score of each candidate title: dot product of its news vector with the user vector pooled
+    // from the history titles (the most recent reads). News vectors are cached by model key and title.
+    AsyncFunction("contentScores") { key: String, historyTitles: List<String>, candidateTitles: List<String> ->
+      synchronized(this@EdgeEncoderModule) {
+        val t0 = SystemClock.elapsedRealtimeNanos()
+        val s = session(key)
+        val before = vectorCache.size
+        val history = historyTitles.filter { it.isNotBlank() }.takeLast(50).map { cachedVector(key, s, it) }
+        val scores = if (history.isEmpty() || userSession == null) {
+          List(candidateTitles.size) { 0.0 }
+        } else {
+          val user = userVector(history)
+          candidateTitles.map { title ->
+            val v = cachedVector(key, s, title)
+            var dot = 0.0
+            for (i in v.indices) dot += v[i] * user[i]
+            dot
+          }
+        }
+        val ms = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6
+        val added = vectorCache.size - before
+        Log.i("EdgeEncoder", "contentScores: ${history.size} history, ${candidateTitles.size} candidates, $added new vectors, $ms ms")
+        mapOf("scores" to scores, "historyUsed" to history.size, "newVectors" to added, "ms" to ms)
+      }
+    }
+
     Function("battery") { readBattery() }
 
     // Battery samples every sampleSeconds for `seconds`; with load = true the encoder runs over the titles in a loop.
@@ -113,6 +148,29 @@ class EdgeEncoderModule : Module() {
       file.writeText(json)
       Log.i("EdgeEncoder", "saved ${file.absolutePath} (${json.length} chars)")
       file.absolutePath
+    }
+  }
+
+  private var userSession: OrtSession? = null
+  private val vectorCache = object : LinkedHashMap<String, FloatArray>(1024, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, FloatArray>?) = size > 5000
+  }
+
+  private fun cachedVector(key: String, s: OrtSession, title: String): FloatArray =
+    "$key\n$title".let { k -> vectorCache[k] ?: encodeOne(s, title).also { vectorCache[k] = it } }
+
+  private fun userVector(history: List<FloatArray>): FloatArray {
+    val u = userSession ?: throw IllegalStateException("user encoder not loaded")
+    val h = history.size
+    val flat = FloatArray(h * 384)
+    history.forEachIndexed { i, v -> System.arraycopy(v, 0, flat, i * 384, 384) }
+    OnnxTensor.createTensor(env, FloatBuffer.wrap(flat), longArrayOf(1, h.toLong(), 384)).use { ht ->
+      OnnxTensor.createTensor(env, FloatBuffer.wrap(FloatArray(h) { 1f }), longArrayOf(1, h.toLong())).use { mt ->
+        u.run(mapOf("history_vectors" to ht, "history_mask" to mt)).use { result ->
+          @Suppress("UNCHECKED_CAST")
+          return (result[0].value as Array<FloatArray>)[0]
+        }
+      }
     }
   }
 
