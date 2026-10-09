@@ -25,8 +25,11 @@ export function AppSettingsProvider({ children }) {
   const [onDeviceLearningRetentionDays, setOnDeviceLearningRetentionDays] = useState(30);
   // Content-aware ranking: the on-device byte-level encoder (src/edgeml/contentRanker.js) adds a
   // similarity between each title and the titles the user read; the weight scales its z-score.
+  // Default 2: the best weight on the first half of MIND dev in the replay of this ranking rule
+  // (MIND-Edge-Recommender, scripts/replay_app.py -> paper/results/app_replay.json), averaged over
+  // the category and subcategory as topic.
   const [contentRankingEnabled, setContentRankingEnabled] = useState(true);
-  const [contentRankingWeight, setContentRankingWeight] = useState(1);
+  const [contentRankingWeight, setContentRankingWeight] = useState(2);
   // Local-feeds region for Popular Categories ('global' = English). When the user
   // hasn't explicitly chosen one, screens derive it from the app language.
   const [feedRegion, setFeedRegion] = useState('global');
