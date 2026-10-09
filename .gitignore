@@ -26,6 +26,9 @@ ios/
 # Android build artifacts
 android/app/build/
 android/build/
+# Local Expo modules (modules/*) build output
+modules/*/android/build/
+modules/*/android/.gradle/
 android/.gradle/
 android/.kotlin/
 android/local.properties
