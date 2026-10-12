@@ -1,8 +1,8 @@
 // Content-aware ranking with the on-device byte-level encoder (research build).
 // Each article title becomes a 384-d vector (modules/edge-encoder, 8-bit file, one thread, cached by title);
 // the user encoder pools the vectors of the most recent reads into one user vector; an article's content
-// score is the dot product of the two, turned into a z-score over the loaded articles so that the setting's
-// weight has the same meaning for any feed. The same rule was replayed on MIND clicks in
+// score is the dot product of the two, turned into a z-score over the unread loaded articles so that the
+// setting's weight has the same meaning for any feed. The same rule was replayed on MIND clicks in
 // MIND-Edge-Recommender (scripts/replay_app.py), which also chose the default weight.
 import { Asset } from 'expo-asset';
 import EdgeEncoder from '../../modules/edge-encoder';
@@ -37,15 +37,18 @@ export function cleanTitle(title) {
   return String(title || '').replace(/\s+/g, ' ').trim();
 }
 
-// articles: [{ id, title }]; historyTitles: newest last. Returns { scores: Map(id -> z-score), raw, ms, historyUsed }.
+// articles: [{ id, title, isRead }]; historyTitles: newest last. Returns { scores: Map(id -> z-score), raw, ms, historyUsed }.
+// Only unread articles get a content score (z-score over the unread ones); a read article gets 0. A title just read
+// is the closest one to the reading history and would otherwise rise to the top of the feed.
 export async function computeContentScores(articles, historyTitles) {
   await ensureReady();
   const titles = articles.map((a) => cleanTitle(a.title));
   const res = await EdgeEncoder.contentScores(KEY, historyTitles.map(cleanTitle), titles);
   const raw = res.scores;
-  const n = raw.length;
-  const mean = n ? raw.reduce((s, x) => s + x, 0) / n : 0;
-  const sd = n ? Math.sqrt(raw.reduce((s, x) => s + (x - mean) * (x - mean), 0) / n) : 0;
-  const scores = new Map(articles.map((a, i) => [a.id, sd > 0 ? (raw[i] - mean) / sd : 0]));
+  const unread = raw.filter((_, i) => !articles[i].isRead);
+  const n = unread.length;
+  const mean = n ? unread.reduce((s, x) => s + x, 0) / n : 0;
+  const sd = n ? Math.sqrt(unread.reduce((s, x) => s + (x - mean) * (x - mean), 0) / n) : 0;
+  const scores = new Map(articles.map((a, i) => [a.id, !a.isRead && sd > 0 ? (raw[i] - mean) / sd : 0]));
   return { scores, raw, ms: res.ms, historyUsed: res.historyUsed, newVectors: res.newVectors };
 }
