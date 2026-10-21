@@ -4,7 +4,7 @@
 import React, { useState } from 'react';
 import { Modal, View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { validateOnDevice, runLatencyBenchmark, runBatteryTest, batteryNow, saveResult } from '../edgeml/edgeEncoder';
+import { pickTestVectors, validateOnDevice, runLatencyBenchmark, runBatteryTest, batteryNow, saveResult } from '../edgeml/edgeEncoder';
 
 const stamp = () => new Date().toISOString().replace(/[:.]/g, '-');
 
@@ -24,6 +24,11 @@ export default function EncoderLabModal({ visible, onClose, theme }) {
       setBusy(null);
     }
   };
+
+  const onLoadTestFile = () => run('test file', async () => {
+    const f = await pickTestVectors();
+    if (f) append(`test file: ${f.name}, ${f.titles} titles`);
+  });
 
   const onValidate = () => run('check', async () => {
     const r = await validateOnDevice();
@@ -70,8 +75,11 @@ export default function EncoderLabModal({ visible, onClose, theme }) {
       <View style={[styles.container, { backgroundColor: colors.background || '#fff' }]}>
         <Text style={[styles.title, { color: colors.text || '#111' }]}>On-device encoder (research)</Text>
         <Text style={[styles.note, { color: colors.textSecondary || '#555' }]}>
-          64-5-384 byte-level encoder, 8-bit and full-precision files. Keep the app open during the tests.
+          64-5-384 byte-level encoder, 8-bit and full-precision files. The tests need the test file
+          (test_vectors.json) written with the model files; copy it to the phone and load it first. Keep the
+          app open during the tests.
         </Text>
+        <Button label="0. Load test file" onPress={onLoadTestFile} />
         <Button label="1. Check against laptop" onPress={onValidate} />
         <Button label="2. Latency per title" onPress={onLatency} />
         <Button label="3. Battery test (2 x 15 min, unplugged)" onPress={onBattery} />
